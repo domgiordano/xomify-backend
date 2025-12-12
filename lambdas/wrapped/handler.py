@@ -6,9 +6,8 @@ import asyncio
 from lambdas.common.utility_helpers import build_successful_handler_response, is_called_from_api, build_error_handler_response, validate_input
 from lambdas.common.errors import WrappednError
 from wrapped_data import update_wrapped_data, get_wrapped_data
-from monthly_wrapped import wrapped_chron_job
 from monthly_wrapped_aiohttp import aiohttp_wrapped_chron_job
-from lambdas.common.constants import LOGGER, AIOHTTP_ACTIVE
+from lambdas.common.constants import LOGGER
 
 log = LOGGER.get_logger(__file__)
 
@@ -20,7 +19,7 @@ def handler(event, context):
 
         # Monthly Wrapped Chron Job
         if 'body' not in event and event.get("source") == 'aws.events':
-            users_downloaded = asyncio.run(wrapped_chron_job(event)) if not AIOHTTP_ACTIVE else asyncio.run(aiohttp_wrapped_chron_job(event))
+            users_downloaded = asyncio.run(aiohttp_wrapped_chron_job(event))
             return build_successful_handler_response({"usersDownloaded": users_downloaded}, False)
 
         is_api = is_called_from_api(event)

@@ -5,7 +5,6 @@ from lambdas.common.logger import Logger
 AWS_DEFAULT_REGION ='us-east-1'
 AWS_ACCOUNT_ID = os.environ['AWS_ACCOUNT_ID']
 PRODUCT = 'xomify'
-AIOHTTP_ACTIVE = os.environ.get('AIOHTTP_ACTIVE', False)
 
 # Headers
 RESPONSE_HEADERS = {

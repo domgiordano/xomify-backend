@@ -2,7 +2,6 @@ import asyncio
 import traceback
 from lambdas.common.utility_helpers import build_successful_handler_response, build_error_handler_response
 from lambdas.common.errors import ReleaseRadarError
-from weekly_release_radar import release_radar_chron_job
 from weekly_release_radar_aiohttp import aiohttp_release_radar_chron_job
 
 from lambdas.common.constants import LOGGER
