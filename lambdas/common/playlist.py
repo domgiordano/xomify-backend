@@ -3,7 +3,7 @@ import aiohttp
 import asyncio
 import time
 from lambdas.common.constants import LOGGER
-from lambdas.common.aiohttp_helper import fetch_json, post_json
+from lambdas.common.aiohttp_helper import fetch_json, post_json, delete_json, put_data
 
 log = LOGGER.get_logger(__file__)
 
@@ -49,7 +49,7 @@ class Playlist:
         
     async def aiohttp_build_playlist(self, uri_list: list, image: str):
         try:
-            log.info(f"Building playlist (aiohttp): {self.name}")
+            log.info(f"Building playlist (aiohttp): {self.name} with {len(uri_list)} tracks")
             self.uri_list = uri_list
             self.image = image
             await self.aiohttp_create_playlist()
@@ -76,12 +76,12 @@ class Playlist:
         
     async def aiohttp_update_playlist(self, uri_list: list):
         try:
-            log.info(f"Updating playlist (aiohttp): {self.name}")
+            log.info(f"Updating playlist (aiohttp): {self.name} with {len(uri_list)} tracks")
             self.uri_list = uri_list
             await self.aiohttp_delete_playlist_songs()
             await asyncio.sleep(1)
             await self.aiohttp_add_playlist_songs()
-            log.info(f"Playlist '{self.name}' Complete!")
+            log.info(f"Playlist '{self.name}' Updated!")
         except Exception as err:
             log.error(f"AIOHTTP Update Playlist: {err}")
             raise Exception(f"AIOHTTP Update Playlist: {err}") from err
@@ -117,7 +117,7 @@ class Playlist:
             log.info("Creating playlist (aiohttp)..")
             url = f"{self.BASE_URL}/users/{self.user_id}/playlists"
             body = {"name": self.name, "description": self.description, "public": True}
-            data = await post_json(self.aiohttp_session, url, headers=self.headers, json=body,)
+            data = await post_json(self.aiohttp_session, url, headers=self.headers, json=body)
             self.playlist = data
             self.id = self.playlist['id']
             log.info(f"AIOHTTP Playlist Creation Complete. ID: {self.id}")
@@ -131,17 +131,12 @@ class Playlist:
     async def add_playlist_songs(self):
         try:
             log.info(f"Adding {len(self.uri_list)} songs to Playlist '{self.name}'")
-            # Define batch size
             batch_size = 100
 
             url = f"{self.BASE_URL}/playlists/{self.id}/tracks"
-            # Iterate through track URIs in batches
             for i in range(0, len(self.uri_list), batch_size):
                 batch_uris = self.uri_list[i:i + batch_size]
-
-                body = {
-                    "uris": batch_uris
-                }
+                body = {"uris": batch_uris}
 
                 response = requests.post(url, json=body, headers=self.headers)
 
@@ -157,18 +152,21 @@ class Playlist:
 
     async def aiohttp_add_playlist_songs(self):
         try:
-            if len(self.uri_list) == 0:
-                log.info("No Tracks to add this week. Skipping.")
+            if not self.uri_list or len(self.uri_list) == 0:
+                log.info("No tracks to add this week. Skipping.")
                 return
+                
             log.info(f"Adding {len(self.uri_list)} songs to Playlist '{self.name}' (aiohttp)")
             batch_size = 100
             url = f"{self.BASE_URL}/playlists/{self.id}/tracks"
+            
             for i in range(0, len(self.uri_list), batch_size):
                 batch_uris = self.uri_list[i:i+batch_size]
                 body = {"uris": batch_uris}
                 await post_json(self.aiohttp_session, url, headers=self.headers, json=body)
-                log.debug(f"AIOHTTP Added {len(batch_uris)} tracks.")
-            log.info("AIOHTTP Tracks Added Successfully.")
+                log.debug(f"AIOHTTP Added {len(batch_uris)} tracks (batch {i//batch_size + 1})")
+                
+            log.info(f"AIOHTTP All {len(self.uri_list)} tracks added successfully.")
         except Exception as err:
             log.error(f"AIOHTTP Add Playlist Songs: {err}")
             raise Exception (f"AIOHTTP Add Playlist Songs: {err}") from err
@@ -176,23 +174,19 @@ class Playlist:
     # ------------------------
     # Add Playlist Image
     # ------------------------
-    async def add_playlist_image(self, retried: bool=False):
+    async def add_playlist_image(self, retried: bool = False):
         try:
             log.info(f"Adding Image to Playlist {self.id}...")
-            # Prepare the API URL
             url = f'{self.BASE_URL}/playlists/{self.id}/images'
-
             body = self.image.replace('\n', '')
 
-            # Make the PUT request
             response = requests.put(url, body, headers=self.headers)
 
-            # Check the response
             if response.status_code != 202:
-                # Retry once
                 if not retried:
-                    log.error("First attempt failed. Retrying.")
-                    self.add_playlist_image(True)
+                    log.warning("First attempt failed. Retrying...")
+                    time.sleep(2)
+                    await self.add_playlist_image(True)
                 else:
                     raise Exception(f"Failed to upload image: {response.status_code} {response.text}")
             
@@ -207,24 +201,26 @@ class Playlist:
             log.info(f"Adding Image to Playlist {self.id} (aiohttp)...")
             url = f'{self.BASE_URL}/playlists/{self.id}/images'
             body = self.image.replace('\n', '')
-            async with self.aiohttp_session.put(url, data=body, headers=self.headers) as resp:
-                if resp.status != 202:
-                    if not retried:
-                        log.error("First attempt failed. Retrying.")
-                        await self.aiohttp_add_playlist_image(True)
-                    else:
-                        raise Exception(f"Failed to upload image: {resp.status} {await resp.text()}")
+            
+            # Use the helper with retry built in
+            await put_data(self.aiohttp_session, url, data=body, headers=self.headers)
             log.info("AIOHTTP Image added to Playlist.")
         except Exception as err:
             log.error(f"AIOHTTP Add Playlist Image: {err}")
-            raise Exception(f"AIOHTTP Add Playlist Image: {err}") from err
+            if not retried:
+                log.warning("Retrying image upload...")
+                await asyncio.sleep(2)
+                await self.aiohttp_add_playlist_image(True)
+            else:
+                raise Exception(f"AIOHTTP Add Playlist Image: {err}") from err
 
     # ------------------------
     # Delete Playlist Songs
     # ------------------------
     async def delete_playlist_songs(self):
         try:
-
+            log.info(f"Deleting all songs from playlist {self.id}...")
+            
             # Fetch all track URIs in the playlist
             tracks_to_remove = []
             limit = 100
@@ -232,22 +228,28 @@ class Playlist:
 
             while True:
                 url = f"{self.BASE_URL}/playlists/{self.id}/tracks?limit={limit}&offset={offset}"
-                resp = requests.get(url, headers=self.headers).json()
-                items = resp.get("items", [])
+                resp = requests.get(url, headers=self.headers)
+                
+                if resp.status_code != 200:
+                    raise Exception(f"Error fetching playlist tracks: {resp.json()}")
+                    
+                data = resp.json()
+                items = data.get("items", [])
                 if not items:
                     break
-                tracks_to_remove.extend([{"uri": item["track"]["uri"]} for item in items])
+                tracks_to_remove.extend([{"uri": item["track"]["uri"]} for item in items if item.get("track")])
                 offset += len(items)
 
-            # Step 2: Delete tracks in batches of 100
+            log.info(f"Found {len(tracks_to_remove)} tracks to remove")
+
+            # Delete tracks in batches of 100
             for i in range(0, len(tracks_to_remove), 100):
                 batch = tracks_to_remove[i:i+100]
                 payload = {"tracks": batch}
                 del_url = f"{self.BASE_URL}/playlists/{self.id}/tracks"
                 resp = requests.delete(del_url, headers=self.headers, json=payload)
                 if resp.status_code not in (200, 201):
-                    log.error("Error deleting batch:", resp.status_code, resp.text)
-                    return
+                    log.error(f"Error deleting batch: {resp.status_code} {resp.text}")
 
             log.info("Tracks removed successfully.")
         except Exception as err:
@@ -256,24 +258,38 @@ class Playlist:
         
     async def aiohttp_delete_playlist_songs(self):
         try:
-            log.info(f"Deleting songs from Playlist {self.name} (aiohttp)")
+            log.info(f"Deleting all songs from playlist {self.name} (aiohttp)")
+            
+            # Fetch all tracks
             tracks_to_remove = []
             limit, offset = 100, 0
+            
             while True:
                 url = f"{self.BASE_URL}/playlists/{self.id}/tracks?limit={limit}&offset={offset}"
                 data = await fetch_json(self.aiohttp_session, url, headers=self.headers)
                 items = data.get("items", [])
                 if not items:
                     break
-                tracks_to_remove.extend([{"uri": item["track"]["uri"]} for item in items])
+                tracks_to_remove.extend([
+                    {"uri": item["track"]["uri"]} 
+                    for item in items 
+                    if item.get("track") and item["track"].get("uri")
+                ])
                 offset += len(items)
+            
+            if not tracks_to_remove:
+                log.info("No tracks to remove.")
+                return
+                
+            log.info(f"Removing {len(tracks_to_remove)} tracks...")
+            
+            # Delete in batches
             for i in range(0, len(tracks_to_remove), 100):
                 batch = tracks_to_remove[i:i+100]
                 payload = {"tracks": batch}
                 url = f"{self.BASE_URL}/playlists/{self.id}/tracks"
-                async with self.aiohttp_session.delete(url, json=payload, headers=self.headers) as resp:
-                    if resp.status not in (200, 201):
-                        raise Exception(f"Error deleting batch: {resp.status} {await resp.text()}")
+                await delete_json(self.aiohttp_session, url, headers=self.headers, json=payload)
+                
             log.info("AIOHTTP Tracks removed successfully.")
         except Exception as err:
             log.error(f"AIOHTTP Delete Playlist Songs: {err}")
