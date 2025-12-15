@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from lambdas.common.wrapped_helper import get_active_wrapped_users
 from lambdas.common.spotify import Spotify
-from lambdas.common.constants import WRAPPED_TABLE_NAME, LOGO_BASE_64, BLACK_2025_BASE_64, LOGGER
+from lambdas.common.constants import WRAPPED_TABLE_NAME, LOGO_BASE_64, BLACK_2025_BASE_64, WRAPPED_2026_LOGOS, LOGGER
 from lambdas.common.dynamo_helpers import update_table_item
 
 log = LOGGER.get_logger(__file__)
@@ -85,10 +85,11 @@ async def aiohttp_process_wrapped_user(user: dict, session: aiohttp.ClientSessio
 
         # Build playlists based on the month
         log.info(f"[{email}] Building playlists (month: {spotify.last_month_number})...")
+        wrapped_playlist_logo = WRAPPED_2026_LOGOS.get(spotify.last_month_number, LOGO_BASE_64) if spotify.this_year == "26" else LOGO_BASE_64
         playlist_tasks = [
             spotify.monthly_spotify_playlist.aiohttp_build_playlist(
                 spotify.top_tracks_short.track_uri_list, 
-                LOGO_BASE_64
+                wrapped_playlist_logo
             )
         ]
 
