@@ -8,7 +8,7 @@ INPUT_DIR = "wrapped_2026"
 OUTPUT_JSON = "wrapped_2026_base64.json"
 
 MAX_SIZE = 262144  # 256 KB
-JPEG_QUALITY = 70
+JPEG_QUALITY = 95
 DIMENSIONS = (300, 300)
 
 def png_to_spotify_base64(path):
