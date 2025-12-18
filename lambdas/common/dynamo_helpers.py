@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import boto3
-from lambdas.common.constants import AWS_DEFAULT_REGION, DYNAMODB_KMS_ALIAS, LOGGER, WRAPPED_TABLE_NAME
+from boto3.dynamodb.conditions import Key
+from lambdas.common.constants import AWS_DEFAULT_REGION, DYNAMODB_KMS_ALIAS, LOGGER, USER_TABLE_NAME, WRAPPED_HISTORY_TABLE_NAME
 
 log = LOGGER.get_logger(__file__)
 
@@ -31,6 +32,7 @@ def full_table_scan(table_name, **kwargs):
     except Exception as err:
         log.error(f"Dynamodb Full Table Scan: {err}")
         raise Exception(f"Dynamodb Full Table Scan: {err}") from err
+    
 def table_scan_by_ids(table_name, key, ids, goal_filter, **kwargs):
     try:
         table = dynamodb_res.Table(table_name)
@@ -156,6 +158,7 @@ def query_table_by_key(table_name, id_key, id_val, ascending=False):
     except Exception as err:
         log.error(f"Dynamodb Table Query Table By Key: {err}")
         raise Exception(f"Dynamodb Query Table Item By Key: {err}") from err
+    
 def item_has_property(item, property):
     for field in item:
         if field == property:
@@ -178,6 +181,7 @@ def deleteTable(table_name):
     except Exception as err:
         log.error(f"Dynamodb Table Delete Table: {err}")
         raise Exception(f"Dynamodb Table Delete Table: {err}") from err
+    
 def createTable(table_name, hash_key, hash_key_type):
     try:
         #Wait for table to be deleted
@@ -231,7 +235,7 @@ def update_user_table_release_radar_id(user: dict, playlist_id: str):
         user['releaseRadarId'] = playlist_id
         # Time Stamp
         user['updatedAt'] = __get_time_stamp()
-        update_table_item(WRAPPED_TABLE_NAME, user)
+        update_table_item(USER_TABLE_NAME, user)
     except Exception as err:
         log.error(f"Update User Table Entry: {err}")
         raise Exception(f"Update User Table Entry: {err}") from err
@@ -239,8 +243,8 @@ def update_user_table_release_radar_id(user: dict, playlist_id: str):
 def update_user_table_refresh_token(email: str, user_id: str,  refresh_token: str):
     try:
         # Get User Data
-        user_exists = check_if_item_exist(WRAPPED_TABLE_NAME, 'email', email, True)
-        user = get_item_by_key(WRAPPED_TABLE_NAME, 'email', email) if user_exists else {}
+        user_exists = check_if_item_exist(USER_TABLE_NAME, 'email', email, True)
+        user = get_item_by_key(USER_TABLE_NAME, 'email', email) if user_exists else {}
         # Email
         user['email'] = email
         # ID
@@ -251,7 +255,7 @@ def update_user_table_refresh_token(email: str, user_id: str,  refresh_token: st
         user['active'] = True
         # Time Stamp
         user['updatedAt'] = __get_time_stamp()
-        update_table_item(WRAPPED_TABLE_NAME, user)
+        update_table_item(USER_TABLE_NAME, user)
         return user
     except Exception as err:
         log.error(f"Update User Table Refresh Token: {err}")
@@ -260,14 +264,14 @@ def update_user_table_refresh_token(email: str, user_id: str,  refresh_token: st
 def update_user_table_enrollments(email: str, wrapped_enrolled: bool, release_radar_enrolled: bool):
     try:
         # Get User Data
-        user = get_item_by_key(WRAPPED_TABLE_NAME, 'email', email)
+        user = get_item_by_key(USER_TABLE_NAME, 'email', email)
         # Release Radar Id
         user['activeWrapped'] = wrapped_enrolled
         # Active
         user['activeReleaseRadar'] = release_radar_enrolled
         # Time Stamp
         user['updatedAt'] = __get_time_stamp()
-        update_table_item(WRAPPED_TABLE_NAME, user)
+        update_table_item(USER_TABLE_NAME, user)
         return user
     except Exception as err:
         log.error(f"Update User Table Refresh Token: {err}")
@@ -280,9 +284,171 @@ def __get_time_stamp():
 def get_user_table_data(email: str):
     try:
         # Get User Data
-        user = get_item_by_key(WRAPPED_TABLE_NAME, 'email', email)
+        user = get_item_by_key(USER_TABLE_NAME, 'email', email)
         return user
     except Exception as err:
         log.error(f"Get User Table Data: {err}")
         raise Exception(f"Get User Table Data: {err}") from err
 
+
+# ============================================
+# WRAPPED HISTORY TABLE - NEW
+# ============================================
+
+def save_monthly_wrap(email: str, month_key: str, top_song_ids: dict, top_artist_ids: dict, top_genres: dict):
+    """
+    Save a single month's wrapped data to the history table.
+    
+    Args:
+        email: User's email (partition key)
+        month_key: Format "YYYY-MM" e.g. "2024-12" (sort key)
+        top_song_ids: { short_term: [], medium_term: [], long_term: [] }
+        top_artist_ids: { short_term: [], medium_term: [], long_term: [] }
+        top_genres: { short_term: {}, medium_term: {}, long_term: {} }
+    """
+    try:
+        log.info(f"Saving monthly wrap for {email} - {month_key}")
+        
+        table = dynamodb_res.Table(WRAPPED_HISTORY_TABLE_NAME)
+        
+        item = {
+            'email': email,
+            'monthKey': month_key,
+            'topSongIds': top_song_ids,
+            'topArtistIds': top_artist_ids,
+            'topGenres': top_genres,
+            'createdAt': __get_time_stamp()
+        }
+        
+        response = table.put_item(Item=item)
+        
+        if response['ResponseMetadata']['HTTPStatusCode'] == 200:
+            log.info(f"Successfully saved wrap for {email} - {month_key}")
+            return item
+        else:
+            raise Exception(f"Failed to save wrap: {response}")
+            
+    except Exception as err:
+        log.error(f"Save Monthly Wrap: {err}")
+        raise Exception(f"Save Monthly Wrap: {err}") from err
+
+
+def get_user_wrap_history(email: str, limit: int = None, ascending: bool = False):
+    """
+    Get all wrapped history for a user, sorted by month.
+    
+    Args:
+        email: User's email
+        limit: Optional limit on number of results
+        ascending: If True, oldest first. If False (default), newest first.
+    
+    Returns:
+        List of wrap objects sorted by monthKey
+    """
+    try:
+        log.info(f"Getting wrap history for {email}")
+        
+        table = dynamodb_res.Table(WRAPPED_HISTORY_TABLE_NAME)
+        
+        query_params = {
+            'KeyConditionExpression': Key('email').eq(email),
+            'ScanIndexForward': ascending  # False = descending (newest first)
+        }
+        
+        if limit:
+            query_params['Limit'] = limit
+        
+        response = table.query(**query_params)
+        wraps = response.get('Items', [])
+        
+        # Handle pagination if needed
+        while 'LastEvaluatedKey' in response and (limit is None or len(wraps) < limit):
+            query_params['ExclusiveStartKey'] = response['LastEvaluatedKey']
+            response = table.query(**query_params)
+            wraps.extend(response.get('Items', []))
+        
+        # Apply limit if specified
+        if limit:
+            wraps = wraps[:limit]
+        
+        log.info(f"Found {len(wraps)} wraps for {email}")
+        return wraps
+        
+    except Exception as err:
+        log.error(f"Get User Wrap History: {err}")
+        raise Exception(f"Get User Wrap History: {err}") from err
+
+
+def get_user_wrap_by_month(email: str, month_key: str):
+    """
+    Get a specific month's wrap data for a user.
+    
+    Args:
+        email: User's email
+        month_key: Format "YYYY-MM" e.g. "2024-12"
+    
+    Returns:
+        Wrap object or None if not found
+    """
+    try:
+        log.info(f"Getting wrap for {email} - {month_key}")
+        
+        table = dynamodb_res.Table(WRAPPED_HISTORY_TABLE_NAME)
+        
+        response = table.get_item(
+            Key={
+                'email': email,
+                'monthKey': month_key
+            }
+        )
+        
+        if 'Item' in response:
+            return response['Item']
+        else:
+            log.info(f"No wrap found for {email} - {month_key}")
+            return None
+            
+    except Exception as err:
+        log.error(f"Get User Wrap By Month: {err}")
+        raise Exception(f"Get User Wrap By Month: {err}") from err
+
+
+def get_user_wraps_in_range(email: str, start_month: str, end_month: str):
+    """
+    Get wrap data for a user within a date range.
+    
+    Args:
+        email: User's email
+        start_month: Format "YYYY-MM" (inclusive)
+        end_month: Format "YYYY-MM" (inclusive)
+    
+    Returns:
+        List of wrap objects within the range
+    """
+    try:
+        log.info(f"Getting wraps for {email} from {start_month} to {end_month}")
+        
+        table = dynamodb_res.Table(WRAPPED_HISTORY_TABLE_NAME)
+        
+        response = table.query(
+            KeyConditionExpression=Key('email').eq(email) & Key('monthKey').between(start_month, end_month),
+            ScanIndexForward=False  # Newest first
+        )
+        
+        wraps = response.get('Items', [])
+        
+        # Handle pagination
+        while 'LastEvaluatedKey' in response:
+            response = table.query(
+                KeyConditionExpression=Key('email').eq(email) & Key('monthKey').between(start_month, end_month),
+                ScanIndexForward=False,
+                ExclusiveStartKey=response['LastEvaluatedKey']
+            )
+            wraps.extend(response.get('Items', []))
+        
+        log.info(f"Found {len(wraps)} wraps in range for {email}")
+        return wraps
+        
+    except Exception as err:
+        log.error(f"Get User Wraps In Range: {err}")
+        raise Exception(f"Get User Wraps In Range: {err}") from err

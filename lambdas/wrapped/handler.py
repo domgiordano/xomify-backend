@@ -1,11 +1,10 @@
 import json
 import traceback
-import inspect
 import asyncio
 
 from lambdas.common.utility_helpers import build_successful_handler_response, is_called_from_api, build_error_handler_response, validate_input
 from lambdas.common.errors import WrappednError
-from wrapped_data import update_wrapped_data, get_wrapped_data
+from wrapped_data import update_wrapped_data, get_wrapped_data, get_wrapped_month, get_wrapped_year
 from monthly_wrapped_aiohttp import aiohttp_wrapped_chron_job
 from lambdas.common.constants import LOGGER
 
@@ -28,26 +27,23 @@ def handler(event, context):
         body = event.get("body")
         http_method = event.get("httpMethod", "POST")
         response = None
-        event_auth = event['headers']['Authorization']
 
         if path:
             log.info(f'Path called: {path} \nWith method: {http_method}')
 
-            # Add New Wrapped Data
+            # POST - Update user enrollment / opt-in
             if (path == f"/{HANDLER}/data") and (http_method == 'POST'):
 
                 event_body = json.loads(body)
                 required_fields = {"email", "userId", "refreshToken", "active"}
-                optional_fields = {"topSongIdsLastMonth", "topArtistIdsLastMonth", "topGenresLastMonth",
-                                   "topSongIdsTwoMonthsAgo", "topArtistIdsTwoMonthsAgo", 
-                                   "topGenresTwoMonthsAgo", "releaseRadarId"}
+                optional_fields = {"releaseRadarId"}
 
                 if not validate_input(event_body, required_fields, optional_fields):
                     raise Exception("Invalid User Input - missing required field or contains extra field.")
 
                 response = update_wrapped_data(event_body, optional_fields)
 
-            # Get Existing Wrapped Data
+            # GET - Get all wrapped data for user (enrollment + history)
             elif (path == f"/{HANDLER}/data") and (http_method == 'GET'):
 
                 query_string_parameters = event.get("queryStringParameters")
@@ -56,6 +52,35 @@ def handler(event, context):
                     raise Exception("Invalid User Input - missing required field or contains extra field.")
 
                 response = get_wrapped_data(query_string_parameters['email'])
+
+            # GET - Get specific month's wrapped data
+            elif (path == f"/{HANDLER}/month") and (http_method == 'GET'):
+
+                query_string_parameters = event.get("queryStringParameters")
+
+                if not validate_input(query_string_parameters, {'email', 'monthKey'}):
+                    raise Exception("Invalid User Input - missing required field or contains extra field.")
+
+                response = get_wrapped_month(
+                    query_string_parameters['email'],
+                    query_string_parameters['monthKey']
+                )
+                
+                if response is None:
+                    response = {"message": "No wrapped data found for this month"}
+
+            # GET - Get all wrapped data for a specific year
+            elif (path == f"/{HANDLER}/year") and (http_method == 'GET'):
+
+                query_string_parameters = event.get("queryStringParameters")
+
+                if not validate_input(query_string_parameters, {'email', 'year'}):
+                    raise Exception("Invalid User Input - missing required field or contains extra field.")
+
+                response = get_wrapped_year(
+                    query_string_parameters['email'],
+                    query_string_parameters['year']
+                )
 
         if response is None:
             raise Exception("Invalid Call.", 400)

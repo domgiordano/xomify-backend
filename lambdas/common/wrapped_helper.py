@@ -1,12 +1,12 @@
 from lambdas.common.dynamo_helpers import full_table_scan
-from lambdas.common.constants import WRAPPED_TABLE_NAME, LOGGER
+from lambdas.common.constants import USER_TABLE_NAME, LOGGER
 
 log = LOGGER.get_logger(__file__)
 
 def get_active_wrapped_users():
      try:
         log.info("Geting active wrapped users...")
-        table_values = full_table_scan(WRAPPED_TABLE_NAME)
+        table_values = full_table_scan(USER_TABLE_NAME)
         table_values[:] = [item for item in table_values if item['activeWrapped']]
         log.info(f"Found {len(table_values)} active users!")
         return table_values
@@ -17,7 +17,7 @@ def get_active_wrapped_users():
 def get_active_release_radar_users():
      try:
         log.info("Geting active release radar users...")
-        table_values = full_table_scan(WRAPPED_TABLE_NAME)
+        table_values = full_table_scan(USER_TABLE_NAME)
         table_values[:] = [item for item in table_values if item['activeReleaseRadar']]
         log.info(f"Found {len(table_values)} active users!")
         return table_values

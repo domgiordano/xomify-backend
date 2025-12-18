@@ -153,20 +153,63 @@ class ArtistList:
             raise Exception(f"AIOHTTP Get User Top Artists {self.term}: {err}") from err
     
     # ------------------------
-    # Get Top Genres
+    # Get Top Genres (IMPROVED - Weighted by artist rank)
     # ------------------------
     def get_top_genres(self):
+        """
+        Calculate top genres with weighted scoring based on artist rank.
+        
+        Artists are assumed to be sorted by listening frequency (most played first).
+        Higher-ranked artists contribute more to genre scores.
+        
+        Returns a dict of { genre: weighted_score }
+        """
         try:
-            log.info(f"Calculating top genres for term {self.term}...")
+            log.info(f"Calculating weighted top genres for term {self.term}...")
             
-            # Count genre occurrences
+            total_artists = len(self.artist_list)
+            genre_scores = {}
+            
+            for rank, artist in enumerate(self.artist_list):
+                # Weight formula: #1 artist gets full weight, last artist gets minimal
+                # Example with 25 artists: #1 gets 25 points, #25 gets 1 point
+                weight = max(total_artists - rank, 1)
+                
+                for genre in artist.get('genres', []):
+                    # Normalize genre name (lowercase, trimmed)
+                    normalized_genre = genre.lower().strip()
+                    genre_scores[normalized_genre] = genre_scores.get(normalized_genre, 0) + weight
+            
+            # Sort by score descending
+            sorted_genres = dict(
+                sorted(genre_scores.items(), key=lambda x: x[1], reverse=True)
+            )
+            
+            self.top_genres = sorted_genres
+            log.info(f"Found {len(sorted_genres)} unique genres (weighted)")
+            
+            # Log top 5 for debugging
+            top_5 = list(sorted_genres.items())[:5]
+            log.info(f"Top 5 genres: {top_5}")
+            
+        except Exception as err:
+            log.error(f"Get Top Genres: {err}")
+            raise Exception(f"Get Top Genres: {err}") from err
+    
+    def get_top_genres_simple(self):
+        """
+        Original simple genre counting (kept for backward compatibility).
+        Just counts how many artists have each genre.
+        """
+        try:
+            log.info(f"Calculating simple genre counts for term {self.term}...")
+            
             genre_counts = {}
             for artist in self.artist_list:
                 for genre in artist.get('genres', []):
                     genre_counts[genre] = genre_counts.get(genre, 0) + 1
             
-            self.top_genres = genre_counts
-            log.info(f"Found {len(genre_counts)} unique genres")
+            return genre_counts
         except Exception as err:
-            log.error(f"Get Top Genres: {err}")
-            raise Exception(f"Get Top Genres: {err}") from err
+            log.error(f"Get Top Genres Simple: {err}")
+            raise Exception(f"Get Top Genres Simple: {err}") from err
