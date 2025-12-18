@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 import boto3
 from boto3.dynamodb.conditions import Key
-from lambdas.common.constants import AWS_DEFAULT_REGION, DYNAMODB_KMS_ALIAS, LOGGER, USER_TABLE_NAME, WRAPPED_HISTORY_TABLE_NAME
+from lambdas.common.constants import AWS_DEFAULT_REGION, DYNAMODB_KMS_ALIAS, LOGGER, USERS_TABLE_NAME, WRAPPED_HISTORY_TABLE_NAME
 
 log = LOGGER.get_logger(__file__)
 
@@ -235,7 +235,7 @@ def update_user_table_release_radar_id(user: dict, playlist_id: str):
         user['releaseRadarId'] = playlist_id
         # Time Stamp
         user['updatedAt'] = __get_time_stamp()
-        update_table_item(USER_TABLE_NAME, user)
+        update_table_item(USERS_TABLE_NAME, user)
     except Exception as err:
         log.error(f"Update User Table Entry: {err}")
         raise Exception(f"Update User Table Entry: {err}") from err
@@ -243,8 +243,8 @@ def update_user_table_release_radar_id(user: dict, playlist_id: str):
 def update_user_table_refresh_token(email: str, user_id: str,  refresh_token: str):
     try:
         # Get User Data
-        user_exists = check_if_item_exist(USER_TABLE_NAME, 'email', email, True)
-        user = get_item_by_key(USER_TABLE_NAME, 'email', email) if user_exists else {}
+        user_exists = check_if_item_exist(USERS_TABLE_NAME, 'email', email, True)
+        user = get_item_by_key(USERS_TABLE_NAME, 'email', email) if user_exists else {}
         # Email
         user['email'] = email
         # ID
@@ -255,7 +255,7 @@ def update_user_table_refresh_token(email: str, user_id: str,  refresh_token: st
         user['active'] = True
         # Time Stamp
         user['updatedAt'] = __get_time_stamp()
-        update_table_item(USER_TABLE_NAME, user)
+        update_table_item(USERS_TABLE_NAME, user)
         return user
     except Exception as err:
         log.error(f"Update User Table Refresh Token: {err}")
@@ -264,14 +264,14 @@ def update_user_table_refresh_token(email: str, user_id: str,  refresh_token: st
 def update_user_table_enrollments(email: str, wrapped_enrolled: bool, release_radar_enrolled: bool):
     try:
         # Get User Data
-        user = get_item_by_key(USER_TABLE_NAME, 'email', email)
+        user = get_item_by_key(USERS_TABLE_NAME, 'email', email)
         # Release Radar Id
         user['activeWrapped'] = wrapped_enrolled
         # Active
         user['activeReleaseRadar'] = release_radar_enrolled
         # Time Stamp
         user['updatedAt'] = __get_time_stamp()
-        update_table_item(USER_TABLE_NAME, user)
+        update_table_item(USERS_TABLE_NAME, user)
         return user
     except Exception as err:
         log.error(f"Update User Table Refresh Token: {err}")
@@ -284,7 +284,7 @@ def __get_time_stamp():
 def get_user_table_data(email: str):
     try:
         # Get User Data
-        user = get_item_by_key(USER_TABLE_NAME, 'email', email)
+        user = get_item_by_key(USERS_TABLE_NAME, 'email', email)
         return user
     except Exception as err:
         log.error(f"Get User Table Data: {err}")

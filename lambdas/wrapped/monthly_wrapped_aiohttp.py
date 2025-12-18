@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 
 from lambdas.common.wrapped_helper import get_active_wrapped_users
 from lambdas.common.spotify import Spotify
-from lambdas.common.constants import USER_TABLE_NAME, LOGO_BASE_64, BLACK_2025_BASE_64, WRAPPED_2026_LOGOS, LOGGER
+from lambdas.common.constants import USERS_TABLE_NAME, LOGO_BASE_64, BLACK_2025_BASE_64, WRAPPED_2026_LOGOS, LOGGER
 from lambdas.common.dynamo_helpers import update_table_item, save_monthly_wrap
 
 log = LOGGER.get_logger(__file__)
@@ -165,7 +165,7 @@ def __update_user_timestamp(user: dict):
     """
     try:
         user['updatedAt'] = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-        update_table_item(USER_TABLE_NAME, user)
+        update_table_item(USERS_TABLE_NAME, user)
     except Exception as err:
         log.error(f"Update User Timestamp: {err}")
         raise

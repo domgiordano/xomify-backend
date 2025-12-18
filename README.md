@@ -130,7 +130,7 @@ Update user enrollments or refresh token.
 # constants.py
 PRODUCT = 'xomify'
 AWS_DEFAULT_REGION = 'us-east-1'
-USER_TABLE_NAME = 'xomify-user'
+USERS_TABLE_NAME = 'xomify-user'
 WRAPPED_HISTORY_TABLE_NAME = 'xomify-wrapped-history'
 DYNAMODB_KMS_ALIAS = 'alias/xomify-kms'
 ```

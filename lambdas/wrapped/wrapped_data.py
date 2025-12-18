@@ -8,7 +8,7 @@ from lambdas.common.dynamo_helpers import (
     get_user_wrap_by_month,
     get_user_wraps_in_range
 )
-from lambdas.common.constants import USER_TABLE_NAME, LOGGER
+from lambdas.common.constants import USERS_TABLE_NAME, LOGGER
 
 log = LOGGER.get_logger(__file__)
 
@@ -23,7 +23,7 @@ def update_wrapped_data(data: dict, optional_fields={}):
             if field not in data:
                 data[field] = None
         db_entry = add_time_stamp(data)
-        response = update_table_item(USER_TABLE_NAME, db_entry)
+        response = update_table_item(USERS_TABLE_NAME, db_entry)
         if response['ResponseMetadata']['HTTPStatusCode'] == 200:
             return 'User Opted into Monthly Wrapped Success.'
         else:
@@ -63,8 +63,8 @@ def get_wrapped_data(email: str):
         }
         
         # Get user enrollment status from main table
-        if check_if_item_exist(USER_TABLE_NAME, 'email', email, True):
-            user_data = get_item_by_key(USER_TABLE_NAME, 'email', email)
+        if check_if_item_exist(USERS_TABLE_NAME, 'email', email, True):
+            user_data = get_item_by_key(USERS_TABLE_NAME, 'email', email)
             response['active'] = user_data.get('active', False)
             response['activeWrapped'] = user_data.get('activeWrapped', False)
             response['activeReleaseRadar'] = user_data.get('activeReleaseRadar', False)
