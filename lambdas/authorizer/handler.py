@@ -47,11 +47,14 @@ def handler(event, context):
         auth_token = event.get('authorizationToken', '')
         
         if auth_token and method_arn:
-            # verify the JWT - only for whitelisted endpoints
             user_details = decode_auth_token(auth_token)
             if user_details:
-                # if the JWT is valid and not expired return a valid policy.
-                return generate_policy('Allow', method_arn)
+                arn_parts = method_arn.split(':')
+                api_gateway_arn_tmp = arn_parts[5].split('/')
+                # Construct: arn:aws:execute-api:region:account:apiId/stage/*
+                resource_arn = f"{arn_parts[0]}:{arn_parts[1]}:{arn_parts[2]}:{arn_parts[3]}:{arn_parts[4]}:{api_gateway_arn_tmp[0]}/{api_gateway_arn_tmp[1]}/*"
+                
+                return generate_policy('Allow', resource_arn)
             
         log.warning("Authroizer: Deny.")
         return generate_policy('Deny', method_arn)
