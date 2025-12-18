@@ -215,7 +215,7 @@ class Spotify:
         """Get track IDs for all time ranges."""
         return {
             "short_term": self.top_tracks_short.track_id_list,
-            "med_term": self.top_tracks_medium.track_id_list,
+            "medium_term": self.top_tracks_medium.track_id_list,
             "long_term": self.top_tracks_long.track_id_list
         }
     
@@ -223,7 +223,7 @@ class Spotify:
         """Get artist IDs for all time ranges."""
         return {
             "short_term": self.top_artists_short.artist_id_list,
-            "med_term": self.top_artists_medium.artist_id_list,
+            "medium_term": self.top_artists_medium.artist_id_list,
             "long_term": self.top_artists_long.artist_id_list
         }
     
@@ -231,7 +231,7 @@ class Spotify:
         """Get genre counts for all time ranges."""
         return {
             "short_term": self.top_artists_short.top_genres,
-            "med_term": self.top_artists_medium.top_genres,
+            "medium_term": self.top_artists_medium.top_genres,
             "long_term": self.top_artists_long.top_genres
         }
     
