@@ -4,12 +4,13 @@ from datetime import datetime, timezone, timedelta
 
 from lambdas.common.wrapped_helper import get_active_wrapped_users
 from lambdas.common.spotify import Spotify
-from lambdas.common.constants import LOGGER, FROM_EMAIL, XOMIFY_URL
+from lambdas.common.constants import FROM_EMAIL, XOMIFY_URL
+from lambdas.common.logger import get_logger
 from lambdas.common.dynamo_helpers import get_user_wrap_by_month
 from lambdas.common.ses_helper import send_wrapped_email
 from email_template import generate_email_html
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 
 def get_last_month_key() -> str:

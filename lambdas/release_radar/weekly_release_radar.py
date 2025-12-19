@@ -2,10 +2,10 @@
 import asyncio
 from lambdas.common.wrapped_helper import get_active_release_radar_users
 from lambdas.common.spotify import Spotify
-from lambdas.common.constants import BLACK_LOGO_BASE_64, LOGGER
+from lambdas.common.constants import BLACK_LOGO_BASE_64
 from lambdas.common.dynamo_helpers import update_user_table_release_radar_id
-
-log = LOGGER.get_logger(__file__)
+from lambdas.common.logger import get_logger
+log = get_logger(__file__)
 
 async def release_radar_chron_job(event):
     try:

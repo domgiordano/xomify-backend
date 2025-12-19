@@ -2,10 +2,10 @@ import requests
 import aiohttp
 import asyncio
 import time
-from lambdas.common.constants import LOGGER
+from lambdas.common.logger import get_logger
 from lambdas.common.aiohttp_helper import fetch_json, post_json, delete_json, put_data
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 class Playlist:
 

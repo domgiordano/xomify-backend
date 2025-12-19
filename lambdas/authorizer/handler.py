@@ -1,11 +1,12 @@
 
 
 import jwt
-from lambdas.common.constants import LOGGER, PRODUCT
+from lambdas.common.constants import PRODUCT
 from lambdas.common.ssm_helpers import API_SECRET_KEY
 from lambdas.common.errors import LambdaAuthorizerError
+from lambdas.common.logger import get_logger
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 HANDLER = 'authorizer'
 
@@ -40,7 +41,7 @@ def decode_auth_token(auth_token):
     except jwt.InvalidTokenError:
         'Invalid token. Please log in again.'
         return
-
+    
 def handler(event, context):
     try:
         method_arn = event.get('methodArn', '')

@@ -4,9 +4,9 @@ import time
 from datetime import datetime
 import asyncio
 from lambdas.common.aiohttp_helper import fetch_json
-from lambdas.common.constants import LOGGER
+from lambdas.common.logger import get_logger
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 class TrackList:
 

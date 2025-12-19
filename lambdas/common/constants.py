@@ -15,7 +15,7 @@ RESPONSE_HEADERS = {
 
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-LOGGER = Logger(LOG_LEVEL)
+#LOGGER = Logger(LOG_LEVEL)
 
 # Dynamodb
 DYNAMODB_KMS_ALIAS = os.environ['DYNAMODB_KMS_ALIAS']

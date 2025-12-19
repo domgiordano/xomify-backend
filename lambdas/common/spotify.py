@@ -6,9 +6,9 @@ from lambdas.common.ssm_helpers import SPOTIFY_CLIENT_SECRET, SPOTIFY_CLIENT_ID
 from lambdas.common.track_list import TrackList
 from lambdas.common.artist_list import ArtistList
 from lambdas.common.playlist import Playlist
-from lambdas.common.constants import LOGGER
+from lambdas.common.logger import get_logger
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 class Spotify:
     """

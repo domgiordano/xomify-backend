@@ -1,8 +1,9 @@
 import boto3
 from botocore.exceptions import ClientError
-from lambdas.common.constants import LOGGER, FROM_EMAIL, AWS_DEFAULT_REGION
+from lambdas.common.constants import FROM_EMAIL, AWS_DEFAULT_REGION
+from lambdas.common.logger import get_logger
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 ses_client = boto3.client('ses', region_name=AWS_DEFAULT_REGION)
 

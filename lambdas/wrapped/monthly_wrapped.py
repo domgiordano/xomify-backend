@@ -5,10 +5,11 @@ import asyncio
 
 from lambdas.common.wrapped_helper import get_active_wrapped_users
 from lambdas.common.spotify import Spotify
-from lambdas.common.constants import USERS_TABLE_NAME, LOGO_BASE_64, BLACK_2025_BASE_64, LOGGER
+from lambdas.common.constants import USERS_TABLE_NAME, LOGO_BASE_64, BLACK_2025_BASE_64
+from lambdas.common.logger import get_logger
 from lambdas.common.dynamo_helpers import update_table_item
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 async def wrapped_chron_job(event):
     try:
