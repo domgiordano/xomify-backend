@@ -1,32 +1,47 @@
+"""
+XOMIFY Release Radar Handler
+============================
+Weekly cron job to update release radar playlists.
+"""
+
 import asyncio
-import traceback
-from lambdas.common.utility_helpers import build_successful_handler_response, build_error_handler_response
-from lambdas.common.errors import ReleaseRadarError
+
+from lambdas.common.logger import get_logger
+from lambdas.common.errors import ReleaseRadarError, handle_errors
+from lambdas.common.utility_helpers import success_response, is_cron_event
 from weekly_release_radar_aiohttp import aiohttp_release_radar_chron_job
 
-from lambdas.common.constants import LOGGER
-
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 HANDLER = 'release-radar'
 
 
+@handle_errors(HANDLER)
 def handler(event, context):
-    try:
-
-        # Monthly Wrapped Chron Job
-        if 'body' not in event and event.get("source") == 'aws.events':
-            success, failures = asyncio.run(aiohttp_release_radar_chron_job(event))
-            return build_successful_handler_response({"successfulUsers": success, "failedUsers": failures}, False)
-
-        else:
-            raise Exception("Invalid Call: Must call from chron job.", 400)
-
-    except Exception as err:
-        message = err.args[0]
-        function = f'handler.{__name__}'
-        if len(err.args) > 1:
-            function = err.args[1]
-        log.error(traceback.print_exc())
-        error = ReleaseRadarError(message, HANDLER, function) if 'Invalid User Input' not in message else ReleaseRadarError(message, HANDLER, function, 400)
-        return build_error_handler_response(str(error))
+    """
+    Main Lambda handler for release radar.
+    
+    Triggered weekly by CloudWatch Events to update
+    release radar playlists for all enrolled users.
+    """
+    
+    # Only allow cron job invocation
+    if not is_cron_event(event):
+        raise ReleaseRadarError(
+            message="Invalid call - must be triggered by cron job",
+            function="handler"
+        )
+    
+    log.info("📻 Starting weekly release radar cron job...")
+    
+    successes, failures = asyncio.run(aiohttp_release_radar_chron_job(event))
+    
+    log.info(f"✅ Release radar complete - {len(successes)} success, {len(failures)} failed")
+    
+    return success_response(
+        {
+            "successfulUsers": successes,
+            "failedUsers": failures
+        },
+        is_api=False
+    )

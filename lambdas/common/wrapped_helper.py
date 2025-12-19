@@ -1,26 +1,68 @@
+"""
+XOMIFY Wrapped Helper
+=====================
+Helper functions for wrapped and release radar user queries.
+"""
+
+from lambdas.common.logger import get_logger
+from lambdas.common.errors import DynamoDBError
 from lambdas.common.dynamo_helpers import full_table_scan
-from lambdas.common.constants import USERS_TABLE_NAME, LOGGER
+from lambdas.common.constants import USERS_TABLE_NAME
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
-def get_active_wrapped_users():
-     try:
-        log.info("Geting active wrapped users...")
-        table_values = full_table_scan(USERS_TABLE_NAME)
-        table_values[:] = [item for item in table_values if item['activeWrapped']]
-        log.info(f"Found {len(table_values)} active users!")
-        return table_values
-     except Exception as err:
-        log.error(f"Get Active Wrapped Users: {err}")
-        raise Exception(f"Get Active Wrapped Users: {err}") from err
-     
-def get_active_release_radar_users():
-     try:
-        log.info("Geting active release radar users...")
-        table_values = full_table_scan(USERS_TABLE_NAME)
-        table_values[:] = [item for item in table_values if item['activeReleaseRadar']]
-        log.info(f"Found {len(table_values)} active users!")
-        return table_values
-     except Exception as err:
-        log.error(f"Get Active Release Radar Users: {err}")
-        raise Exception(f"Get Active Release Radar Users: {err}") from err
+
+def get_active_wrapped_users() -> list:
+    """
+    Get all users enrolled in monthly wrapped.
+    
+    Returns:
+        List of user dicts with activeWrapped=True
+    """
+    try:
+        log.info("Fetching active wrapped users...")
+        
+        all_users = full_table_scan(USERS_TABLE_NAME)
+        active_users = [
+            user for user in all_users 
+            if user.get('activeWrapped', False) and user.get('active', False)
+        ]
+        
+        log.info(f"Found {len(active_users)} active wrapped users")
+        return active_users
+        
+    except Exception as err:
+        log.error(f"Get active wrapped users failed: {err}")
+        raise DynamoDBError(
+            message=str(err),
+            function="get_active_wrapped_users",
+            table=USERS_TABLE_NAME
+        )
+
+
+def get_active_release_radar_users() -> list:
+    """
+    Get all users enrolled in release radar.
+    
+    Returns:
+        List of user dicts with activeReleaseRadar=True
+    """
+    try:
+        log.info("Fetching active release radar users...")
+        
+        all_users = full_table_scan(USERS_TABLE_NAME)
+        active_users = [
+            user for user in all_users 
+            if user.get('activeReleaseRadar', False) and user.get('active', False)
+        ]
+        
+        log.info(f"Found {len(active_users)} active release radar users")
+        return active_users
+        
+    except Exception as err:
+        log.error(f"Get active release radar users failed: {err}")
+        raise DynamoDBError(
+            message=str(err),
+            function="get_active_release_radar_users",
+            table=USERS_TABLE_NAME
+        )

@@ -1,65 +1,94 @@
-import json
-import traceback
+"""
+XOMIFY User Table Handler
+=========================
+API endpoints for user management.
+"""
 
-from lambdas.common.utility_helpers import build_successful_handler_response, is_called_from_api, build_error_handler_response, validate_input
-from lambdas.common.errors import UpdateUserTableError
-from lambdas.common.dynamo_helpers import update_user_table_refresh_token, update_user_table_enrollments, get_user_table_data
-from lambdas.common.constants import LOGGER
+from lambdas.common.logger import get_logger
+from lambdas.common.errors import UserTableError, ValidationError, handle_errors
+from lambdas.common.utility_helpers import (
+    success_response,
+    is_api_request,
+    parse_body,
+    get_query_params,
+    require_fields
+)
+from lambdas.common.dynamo_helpers import (
+    update_user_table_refresh_token,
+    update_user_table_enrollments,
+    get_user_table_data
+)
 
-log = LOGGER.get_logger(__file__)
+log = get_logger(__file__)
 
 HANDLER = 'user'
 
 
+@handle_errors(HANDLER)
 def handler(event, context):
-    try:
-
-        is_api = is_called_from_api(event)
-
-        path = event.get("path").lower()
-        body = event.get("body")
-        http_method = event.get("httpMethod", "POST")
-        response = None
-
-        if path:
-            log.info(f'Path called: {path} \nWith method: {http_method}')
-
-            # Update User Table
-            if (path == f"/{HANDLER}/user-table") and (http_method == 'POST'):
-
-                event_body = json.loads(body)
-                required_fields = {"email"}
-                optional_fields = {"refreshToken", "userId", "wrappedEnrolled", "releaseRadarEnrolled"}
-
-                if not validate_input(event_body, required_fields, optional_fields):
-                    raise Exception("Invalid User Input - missing required field or contains extra field.")
-                
-                if 'wrappedEnrolled' in event_body and 'releaseRadarEnrolled' in event_body:
-                    response = update_user_table_enrollments(event_body['email'], event_body['wrappedEnrolled'], event_body['releaseRadarEnrolled'])
-                elif 'refreshToken' in event_body and 'userId' in event_body:
-                    response = update_user_table_refresh_token(event_body['email'], event_body['userId'], event_body['refreshToken'])
-                else:
-                    raise Exception("Invalid User Input - incorrect combination or types of inputs.")
-            # GET user table
-            if (path == f"/{HANDLER}/user-table")  and (http_method == 'GET'):
-
-                query_string_parameters = event.get("queryStringParameters")
-
-                if not validate_input(query_string_parameters, {'email'}):
-                    raise Exception("Invalid User Input - missing required field or contains extra field.")
-
-                response = get_user_table_data(query_string_parameters['email'])
-
-        if response is None:
-            raise Exception("Invalid Call.", 400)
+    """
+    Main Lambda handler for user table operations.
+    
+    Endpoints:
+        POST /user/user-table - Update user (refresh token or enrollments)
+        GET  /user/user-table - Get user data
+    """
+    
+    is_api = is_api_request(event)
+    path = event.get("path", "").lower()
+    http_method = event.get("httpMethod", "POST")
+    
+    log.info(f"API Request: {http_method} {path}")
+    
+    # POST /user/user-table - Update user
+    if path == f"/{HANDLER}/user-table" and http_method == "POST":
+        body = parse_body(event)
+        require_fields(body, 'email')
+        
+        # Determine which update type based on fields present
+        has_enrollment_fields = 'wrappedEnrolled' in body and 'releaseRadarEnrolled' in body
+        has_token_fields = 'refreshToken' in body and 'userId' in body
+        
+        if has_enrollment_fields:
+            # Update enrollments
+            response = update_user_table_enrollments(
+                body['email'],
+                body['wrappedEnrolled'],
+                body['releaseRadarEnrolled']
+            )
+            log.info(f"Updated enrollments for {body['email']}")
+            
+        elif has_token_fields:
+            # Update refresh token
+            response = update_user_table_refresh_token(
+                body['email'],
+                body['userId'],
+                body['refreshToken']
+            )
+            log.info(f"Updated refresh token for {body['email']}")
+            
         else:
-            return build_successful_handler_response(response, is_api)
-
-    except Exception as err:
-        message = err.args[0]
-        function = f'handler.{__name__}'
-        if len(err.args) > 1:
-            function = err.args[1]
-        log.error(traceback.print_exc())
-        error = UpdateUserTableError(message, HANDLER, function) if 'Invalid User Input' not in message else UpdateUserTableError(message, HANDLER, function, 400)
-        return build_error_handler_response(str(error))
+            raise ValidationError(
+                message="Invalid request - must include either (wrappedEnrolled, releaseRadarEnrolled) or (refreshToken, userId)",
+                handler=HANDLER,
+                function="handler"
+            )
+        
+        return success_response(response, is_api=is_api)
+    
+    # GET /user/user-table - Get user data
+    if path == f"/{HANDLER}/user-table" and http_method == "GET":
+        params = get_query_params(event)
+        require_fields(params, 'email')
+        
+        response = get_user_table_data(params['email'])
+        log.info(f"Retrieved data for {params['email']}")
+        
+        return success_response(response, is_api=is_api)
+    
+    # Unknown endpoint
+    raise ValidationError(
+        message=f"Invalid endpoint: {http_method} {path}",
+        handler=HANDLER,
+        function="handler"
+    )

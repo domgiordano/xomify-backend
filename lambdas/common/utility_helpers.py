@@ -1,126 +1,293 @@
+"""
+XOMIFY Utility Helpers
+======================
+Common utilities for Lambda handlers.
+"""
 
-import datetime
-import decimal
 import json
-import logging
-import os
-from urllib3.connection import HTTPConnection
+import decimal
 import base64
+from datetime import datetime
+from typing import Any, Optional, Set
 
-# Used to ensure we dump our JSON out with a decimal decoder, so that it gets logged okay if a decimal.
-from lambdas.common.constants import RESPONSE_HEADERS
+from lambdas.common.logger import get_logger
 
-class DecimalEncoder(json.JSONEncoder):
+log = get_logger(__file__)
+
+
+# ============================================
+# JSON Encoding
+# ============================================
+
+class XomifyJSONEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder that handles:
+    - Decimal (from DynamoDB)
+    - datetime objects
+    - sets
+    """
     def default(self, obj):
         if isinstance(obj, decimal.Decimal):
-            return int(obj)
-        return super(DecimalEncoder, self).default(obj)
+            # Convert to int if whole number, else float
+            if obj % 1 == 0:
+                return int(obj)
+            return float(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        if isinstance(obj, set):
+            return list(obj)
+        return super().default(obj)
 
+
+def json_dumps(obj: Any) -> str:
+    """Serialize object to JSON string with custom encoder."""
+    return json.dumps(obj, cls=XomifyJSONEncoder)
+
+
+# ============================================
+# Request Parsing
+# ============================================
+
+def is_api_request(event: dict) -> bool:
+    """Check if the event is from API Gateway."""
+    return isinstance(event.get('body'), str)
+
+
+def is_cron_event(event: dict) -> bool:
+    """Check if the event is from CloudWatch Events (cron)."""
+    return event.get('source') == 'aws.events'
+
+
+def parse_body(event: dict) -> dict:
+    """
+    Parse the request body from an event.
+    Handles both API Gateway (string) and direct invocation (dict).
+    """
+    body = event.get('body')
+    
+    if body is None:
+        return {}
+    
+    if isinstance(body, str):
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError:
+            log.warning("Failed to parse body as JSON")
+            return {}
+    
+    return body if isinstance(body, dict) else {}
+
+
+def get_query_params(event: dict) -> dict:
+    """Get query string parameters from event."""
+    return event.get('queryStringParameters') or {}
+
+
+def get_path_params(event: dict) -> dict:
+    """Get path parameters from event."""
+    return event.get('pathParameters') or {}
+
+
+# ============================================
+# Response Building
+# ============================================
+
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type,Authorization,X-Amz-Date,X-Api-Key,X-Amz-Security-Token",
+    "Access-Control-Allow-Methods": "GET,POST,PUT,DELETE,OPTIONS",
+    "Content-Type": "application/json"
+}
+
+
+def success_response(body: Any, status_code: int = 200, is_api: bool = True) -> dict:
+    """
+    Build a successful Lambda response.
+    
+    Args:
+        body: Response data (will be JSON encoded if is_api=True)
+        status_code: HTTP status code (default 200)
+        is_api: If True, JSON encode the body
+        
+    Returns:
+        Lambda response dict
+    """
+    return {
+        "statusCode": status_code,
+        "headers": CORS_HEADERS,
+        "body": json_dumps(body) if is_api else body,
+        "isBase64Encoded": False
+    }
+
+
+def error_response(
+    message: str, 
+    status_code: int = 500, 
+    is_api: bool = True,
+    details: Optional[dict] = None
+) -> dict:
+    """
+    Build an error Lambda response.
+    
+    Args:
+        message: Error message
+        status_code: HTTP status code (default 500)
+        is_api: If True, JSON encode the body
+        details: Optional additional error details
+        
+    Returns:
+        Lambda response dict
+    """
+    body = {
+        "error": {
+            "message": message,
+            "status": status_code,
+            **(details or {})
+        }
+    }
+    
+    return {
+        "statusCode": status_code,
+        "headers": CORS_HEADERS,
+        "body": json_dumps(body) if is_api else body,
+        "isBase64Encoded": False
+    }
+
+
+# ============================================
+# Input Validation
+# ============================================
+
+def validate_input(
+    data: Optional[dict], 
+    required_fields: Set[str] = None, 
+    optional_fields: Set[str] = None
+) -> tuple[bool, Optional[str]]:
+    """
+    Validate input data has required fields and no extra fields.
+    
+    Args:
+        data: Input dictionary to validate
+        required_fields: Set of required field names
+        optional_fields: Set of optional field names
+        
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    required_fields = required_fields or set()
+    optional_fields = optional_fields or set()
+    
+    if data is None:
+        if required_fields:
+            return False, f"Missing required fields: {required_fields}"
+        return True, None
+    
+    if not isinstance(data, dict):
+        return False, "Input must be a dictionary"
+    
+    data_keys = set(data.keys())
+    allowed_keys = required_fields | optional_fields
+    
+    # Check for missing required fields
+    missing = required_fields - data_keys
+    if missing:
+        return False, f"Missing required fields: {missing}"
+    
+    # Check for extra fields (if optional_fields is specified)
+    if optional_fields:
+        extra = data_keys - allowed_keys
+        if extra:
+            return False, f"Unexpected fields: {extra}"
+    
+    return True, None
+
+
+def require_fields(data: dict, *fields: str) -> None:
+    """
+    Raise ValidationError if any required fields are missing.
+    
+    Usage:
+        require_fields(body, 'email', 'userId')
+    """
+    from lambdas.common.errors import ValidationError
+    
+    missing = [f for f in fields if f not in data or data[f] is None]
+    if missing:
+        raise ValidationError(
+            message=f"Missing required fields: {', '.join(missing)}",
+            field=missing[0]
+        )
+
+
+# ============================================
+# Date/Time Utilities
+# ============================================
+
+def get_timestamp() -> str:
+    """Get current UTC timestamp in standard format."""
+    return datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def get_iso_timestamp() -> str:
+    """Get current UTC timestamp in ISO format."""
+    return datetime.utcnow().isoformat() + 'Z'
+
+
+def format_date(raw_date: str) -> datetime:
+    """Parse MM/DD/YYYY date string to datetime."""
+    parts = raw_date.split('/')
+    return datetime(int(parts[2]), int(parts[0]), int(parts[1]))
+
+
+# ============================================
+# Encoding Utilities
+# ============================================
+
+def encode_credentials(key: str, secret: str) -> str:
+    """Base64 encode credentials for Basic Auth."""
+    data = f"{key}:{secret}"
+    return base64.b64encode(data.encode('utf-8')).decode('utf-8')
+
+
+# ============================================
+# Backward Compatibility
+# ============================================
+# These match your old function names
+
+DecimalEncoder = XomifyJSONEncoder
 
 def is_called_from_api(event):
-    # If body is not a dict, we'll assume it's a string from API Gateway
-    return type(event['body']) != dict
-
+    return is_api_request(event)
 
 def extract_body_from_event(event, is_api):
-    if is_api:
-        return json.loads(event.get('body'))
-    else:
-        return event.get('body')
-
+    return parse_body(event)
 
 def build_successful_handler_response(body_object, is_api):
-    """This function that should be invoked in the except block of customer facing _handler functions
-    Returns a successful _handler call."""
-    return {
-        'statusCode': 200,
-        'headers': RESPONSE_HEADERS,
-        'body': json.dumps(body_object, cls=DecimalEncoder) if is_api else body_object,
-        "isBase64Encoded": False
-    }
-
+    return success_response(body_object, is_api=is_api)
 
 def build_error_handler_response(error, is_api=True):
-    """This function that should be invoked in the except block of customer facing _handler functions.
-    Returns a generic error response with a string in the "message" property of the actual error.
-    The calling application should examine response body for an 'error' property at root of it.  If that is present,
-    then the body would also contain a 'message' property from which you can grab the message text to shown to the
-    customer-facing web user, if the handler is to be used by customer apps.  Customer-facing handlers should pass
-    in constants.GENERIC_CUSTOMER_FACING_ERROR_MSG as the 'friendly_error_msg'.
-    Otherwise, build_successful__handler_response should be invoked as the last statement in the try block of the
-    calling _handler function."""
-    error_dict = json.loads(error)
-    status = error_dict['status']
-    del error_dict['status']
-    body_object = {"error": error_dict}
-    return {
-        'statusCode': status,
-        'headers': RESPONSE_HEADERS,
-        'body': json.dumps(body_object, cls=DecimalEncoder) if is_api else body_object,
-        "isBase64Encoded": False
-    }
-
+    """Handle old-style error string format."""
+    if isinstance(error, str):
+        try:
+            error_dict = json.loads(error)
+            status = error_dict.get('status', 500)
+            message = error_dict.get('message', str(error))
+        except json.JSONDecodeError:
+            status = 500
+            message = str(error)
+    else:
+        status = 500
+        message = str(error)
+    
+    return error_response(message, status_code=status, is_api=is_api)
 
 def set_response(statusCode, body):
-    return {
-        "statusCode": statusCode or 500,
-        "headers": {"Access-Control-Allow-Origin": "*", "Content-Type": "application/json"},
-        "body": body or {"error": {"message": "Something went wrong..."}},
-        "isBase64Encoded": False
-    }
+    return success_response(body, status_code=statusCode or 500)
 
+def validate_input_legacy(input, required_fields={}, optional_fields={}):
+    """Legacy validate_input for backward compatibility."""
+    is_valid, _ = validate_input(input, set(required_fields), set(optional_fields))
+    return is_valid
 
-def log_handler_error(friendly_error_msg, err_args_text, calling_module):
-    # logging configuration:
-    friendly_error_msg = "log_error called from {0}! FRIENDLY MESSAGE: {1}".format(
-        calling_module, friendly_error_msg)
-    err_args_text = "log_error called from {0}! ERR ARGS: {1}".format(
-        calling_module, err_args_text)
-
-    logger = logging.getLogger()
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - line #: %(lineno)d - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
-    logger.setLevel(logging.DEBUG)
-    HTTPConnection.debuglevel = 1
-
-    # Actually perform the logging...
-    logger.error(friendly_error_msg)
-    logger.error(err_args_text)
-
-def request_on_long():
-    """Format = YYYY-MM-DD - Example: 2022-03-02"""
-
-    time_now = datetime.datetime.utcnow()
-    date_now = time_now.strftime('%Y-%m-%d')
-    return date_now
-
-
-def request_time():
-    """Format = PTAHBMCS where A, B, and C are hours, mins, seconds - Example: PT16H19M10S"""
-
-    time_now = datetime.datetime.utcnow()
-    requested_time_template = "PT{}H{}M{}S"
-    return requested_time_template.format(time_now.strftime('%H'), time_now.strftime('%M'), time_now.strftime('%S'))
-
-
-def encoded_key(consumer_key, consumer_secret):
-    """Rest authentication for Basic Auth Encoding."""
-    data = "%s:%s" % (consumer_key, consumer_secret)
-    encoded_bytes = base64.b64encode(data.encode("utf-8"))
-    encoded_str = str(encoded_bytes, "utf-8")
-    return encoded_str
-
-def format_date(raw_date):
-    date_mdy = raw_date.split('/')
-    date = datetime.datetime(int(date_mdy[2]), int(date_mdy[0]), int(date_mdy[1]))
-    return date
-
-def validate_input(input, required_fields={}, optional_fields={}):
-    if input is None and not required_fields and not optional_fields:
-        return True
-    allowed_fields = set(required_fields) | set(optional_fields)
-    return required_fields <= set(input.keys()) <= allowed_fields
+# Point old name to new function
+validate_input = validate_input_legacy
