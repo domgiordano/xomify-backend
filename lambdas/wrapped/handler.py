@@ -1,7 +1,6 @@
 """
 XOMIFY Wrapped Handler
 ======================
-Handles wrapped cron jobs and API endpoints.
 """
 
 import asyncio
@@ -26,19 +25,6 @@ HANDLER = 'wrapped'
 
 @handle_errors(HANDLER)
 def handler(event, context):
-    """
-    Main Lambda handler for wrapped endpoints.
-    
-    Endpoints:
-        POST /wrapped/data - Update user enrollment
-        GET  /wrapped/data - Get all wrapped data for user
-        GET  /wrapped/month - Get specific month's data
-        GET  /wrapped/year - Get specific year's data
-        
-    Cron:
-        Triggered monthly to generate wrapped playlists
-    """
-    
     # Cron job - Monthly Wrapped
     if is_cron_event(event):
         log.info("🎵 Starting monthly wrapped cron job...")
@@ -46,12 +32,19 @@ def handler(event, context):
         log.info(f"✅ Wrapped complete - {len(users_processed)} users processed")
         return success_response({"usersDownloaded": users_processed}, is_api=False)
     
-    # API requests
-    is_api = is_api_request(event)
+    # API requests - is_api is True by default
     path = event.get("path", "").lower()
     http_method = event.get("httpMethod", "POST")
     
     log.info(f"API Request: {http_method} {path}")
+    
+    # GET /wrapped/data - Get all wrapped data for user
+    if path == f"/{HANDLER}/data" and http_method == "GET":
+        params = get_query_params(event)
+        require_fields(params, 'email')
+        
+        response = get_wrapped_data(params['email'])
+        return success_response(response)  # is_api=True by default, will JSON.stringify body
     
     # POST /wrapped/data - Update user enrollment
     if path == f"/{HANDLER}/data" and http_method == "POST":
@@ -60,17 +53,9 @@ def handler(event, context):
         
         optional_fields = {'releaseRadarId'}
         response = update_wrapped_data(body, optional_fields)
-        return success_response(response, is_api=is_api)
+        return success_response(response)
     
-    # GET /wrapped/data - Get all wrapped data for user
-    if path == f"/{HANDLER}/data" and http_method == "GET":
-        params = get_query_params(event)
-        require_fields(params, 'email')
-        
-        response = get_wrapped_data(params['email'])
-        return success_response(response, is_api=is_api)
-    
-    # GET /wrapped/month - Get specific month's data
+    # GET /wrapped/month
     if path == f"/{HANDLER}/month" and http_method == "GET":
         params = get_query_params(event)
         require_fields(params, 'email', 'monthKey')
@@ -78,17 +63,16 @@ def handler(event, context):
         response = get_wrapped_month(params['email'], params['monthKey'])
         if response is None:
             response = {"message": "No wrapped data found for this month"}
-        return success_response(response, is_api=is_api)
+        return success_response(response)
     
-    # GET /wrapped/year - Get specific year's data
+    # GET /wrapped/year
     if path == f"/{HANDLER}/year" and http_method == "GET":
         params = get_query_params(event)
         require_fields(params, 'email', 'year')
         
         response = get_wrapped_year(params['email'], params['year'])
-        return success_response(response, is_api=is_api)
+        return success_response(response)
     
-    # Unknown endpoint
     raise ValidationError(
         message=f"Invalid endpoint: {http_method} {path}",
         handler=HANDLER,
