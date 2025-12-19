@@ -1,7 +1,7 @@
 import requests
 import aiohttp
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, date
 import asyncio
 from lambdas.common.aiohttp_helper import fetch_json
 from lambdas.common.logger import get_logger
@@ -189,7 +189,7 @@ class TrackList:
             release_uris = []
             for release in response_data.get('items', []):
                 release_date = release.get('release_date', '')
-                if self.__is_within_a_week(release_date):
+                if self.__is_within_release_week(release_date):
                     log.debug(f"New release: {release['name']} ({release_date})")
                     release_uris.append(release['uri'])
             
@@ -214,7 +214,7 @@ class TrackList:
             release_uris = []
             for release in data.get('items', []):
                 release_date = release.get('release_date', '')
-                if self.__is_within_a_week(release_date):
+                if self.__is_within_release_week(release_date):
                     log.debug(f"New release found: {release['name']} - {release_date}")
                     release_uris.append(release['uri'])
             
@@ -325,31 +325,38 @@ class TrackList:
     # ------------------------
     # Helper Functions
     # ------------------------
-    def __is_within_a_week(self, target_date_str: str) -> bool:
-        """Check if a date string is within the last 7 days."""
+    def __is_within_release_week(self, target_date_str: str) -> bool:
+        """
+        Include releases from last Saturday through today.
+        Excludes last Friday and earlier.
+        """
         try:
             if not target_date_str or len(target_date_str) < 4:
                 return False
-            
+
             today = datetime.today().date()
-            
-            # Handle different date formats from Spotify
-            # Could be: "2024" (year only), "2024-01" (year-month), "2024-01-15" (full date)
-            if len(target_date_str) == 4:  # Year only
-                return False  # Can't determine week from year only
-            elif len(target_date_str) == 7:  # Year-month
-                # Check if it's current month
-                target_date = datetime.strptime(target_date_str, '%Y-%m')
-                return (today.year == target_date.year and today.month == target_date.month)
-            else:  # Full date
-                target_date = datetime.strptime(target_date_str[:10], '%Y-%m-%d').date()
-                difference_in_days = (today - target_date).days
-                return 0 <= difference_in_days < 7
+            start_date = self._most_recent_saturday(today)
+
+            # Spotify date formats
+            if len(target_date_str) == 4:
+                return False  # year only → ignore
+            elif len(target_date_str) == 7:
+                # Treat year-month as first of month (Spotify limitation)
+                target_date = datetime.strptime(target_date_str, "%Y-%m").date()
+            else:
+                target_date = datetime.strptime(target_date_str[:10], "%Y-%m-%d").date()
+
+            return start_date <= target_date <= today
                 
         except Exception as err:
             log.warning(f"Error parsing date '{target_date_str}': {err}")
             return False
-        
+    
+    def _most_recent_saturday(self, today: date) -> date:
+        # Monday=0 ... Saturday=5 ... Sunday=6
+        days_since_saturday = (today.weekday() - 5) % 7
+        return today - timedelta(days=days_since_saturday)
+
     def __split_spotify_uris(self, uris: list) -> tuple:
         """Split URIs into tracks and albums."""
         tracks = [uri for uri in uris if uri and uri.startswith("spotify:track:")]

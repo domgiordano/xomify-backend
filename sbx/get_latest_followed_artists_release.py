@@ -123,22 +123,7 @@ def __split_spotify_uris(uris):
     albums = [id for id in uris if id and id.startswith("spotify:album:")]
     return tracks, albums
 
-## RUN IT
-access_token = get_access_token(DOM_REFRESH_TOKEN)
-HEADERS: dict = {
-    'Authorization': f'Bearer {access_token}',
-    'Content-Type': 'application/json'
-}
-user = get_user(access_token)
-user_id = user['id']
-print(user_id)
-#artist_ids = get_followed_artists(HEADERS)
-#print(f"{len(artist_ids)} Artists found:")
-griz_id = "25oLRSUjJk4YHNUsQXk7Ut"
-gryffin_id = "2ZRQcIgzPCVaT9XKhXZIzh"
-drake_id = "3TVXtAsR1Inumwj472S9r4"
-artist_ids = [griz_id, gryffin_id, drake_id]
-asyncio.run(get_artist_latest_release(artist_ids, HEADERS))
+
 
 
 
