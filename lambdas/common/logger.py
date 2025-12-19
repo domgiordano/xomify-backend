@@ -13,6 +13,7 @@ Fixes:
 import logging
 import sys
 from typing import Optional
+from lambdas.common.constants import LOG_LEVEL
 
 
 class XomifyLogger:
@@ -78,7 +79,7 @@ class XomifyLogger:
 
 
 # Global logger instance - import this in other modules
-LOGGER = XomifyLogger()
+LOGGER = XomifyLogger(LOG_LEVEL)
 
 # Convenience: direct access to common log methods
 log = LOGGER.logger
