@@ -34,47 +34,10 @@ def handler(event, context):
         GET  /user/user-table - Get user data
     """
     
-    is_api = is_api_request(event)
     path = event.get("path", "").lower()
     http_method = event.get("httpMethod", "POST")
     
     log.info(f"API Request: {http_method} {path}")
-    
-    # POST /user/user-table - Update user
-    if path == f"/{HANDLER}/user-table" and http_method == "POST":
-        body = parse_body(event)
-        require_fields(body, 'email')
-        
-        # Determine which update type based on fields present
-        has_enrollment_fields = 'wrappedEnrolled' in body and 'releaseRadarEnrolled' in body
-        has_token_fields = 'refreshToken' in body and 'userId' in body
-        
-        if has_enrollment_fields:
-            # Update enrollments
-            response = update_user_table_enrollments(
-                body['email'],
-                body['wrappedEnrolled'],
-                body['releaseRadarEnrolled']
-            )
-            log.info(f"Updated enrollments for {body['email']}")
-            
-        elif has_token_fields:
-            # Update refresh token
-            response = update_user_table_refresh_token(
-                body['email'],
-                body['userId'],
-                body['refreshToken']
-            )
-            log.info(f"Updated refresh token for {body['email']}")
-            
-        else:
-            raise ValidationError(
-                message="Invalid request - must include either (wrappedEnrolled, releaseRadarEnrolled) or (refreshToken, userId)",
-                handler=HANDLER,
-                function="handler"
-            )
-        
-        return success_response(response, is_api=is_api)
     
     # GET /user/user-table - Get user data
     if path == f"/{HANDLER}/user-table" and http_method == "GET":
@@ -84,7 +47,46 @@ def handler(event, context):
         response = get_user_table_data(params['email'])
         log.info(f"Retrieved data for {params['email']}")
         
-        return success_response(response, is_api=is_api)
+        return success_response(response)  # is_api=True by default, JSON stringifies body
+    
+    # POST /user/user-table - Update user
+    if path == f"/{HANDLER}/user-table" and http_method == "POST":
+        body = parse_body(event)
+        require_fields(body, 'email')
+        
+        # Determine which update type based on fields present
+        has_enrollment_fields = 'wrappedEnrolled' in body or 'releaseRadarEnrolled' in body
+        has_token_fields = 'refreshToken' in body and 'userId' in body
+        
+        if has_token_fields:
+            # Update refresh token (also returns current enrollment status)
+            response = update_user_table_refresh_token(
+                body['email'],
+                body['userId'],
+                body['refreshToken']
+            )
+            log.info(f"Updated refresh token for {body['email']}")
+            
+        elif has_enrollment_fields:
+            # Update enrollments
+            wrapped = body.get('wrappedEnrolled', False)
+            radar = body.get('releaseRadarEnrolled', False)
+            
+            response = update_user_table_enrollments(
+                body['email'],
+                wrapped,
+                radar
+            )
+            log.info(f"Updated enrollments for {body['email']}: wrapped={wrapped}, radar={radar}")
+            
+        else:
+            raise ValidationError(
+                message="Invalid request - must include either (refreshToken, userId) or (wrappedEnrolled/releaseRadarEnrolled)",
+                handler=HANDLER,
+                function="handler"
+            )
+        
+        return success_response(response)  # is_api=True by default, JSON stringifies body
     
     # Unknown endpoint
     raise ValidationError(
