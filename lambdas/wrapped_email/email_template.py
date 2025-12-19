@@ -97,43 +97,19 @@ def generate_email_html(
                         </td>
                     </tr>
                     
-                    <!-- Hero Section -->
+                    <!-- Hero Section with Gradient Title -->
                     <tr>
-                        <td style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 24px 24px 0 0; padding: 40px 32px; text-align: center;">
-                            <h1 style="margin: 0 0 8px 0; font-size: 28px; font-weight: 800; color: #ffffff;">
-                                Your {month_name} Wrapped
+                        <td style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border-radius: 24px 24px 0 0; padding: 48px 32px; text-align: center;">
+                            <p style="margin: 0 0 12px 0; color: #8a8a9a; font-size: 14px; text-transform: uppercase; letter-spacing: 2px;">
+                                Your monthly recap is here
+                            </p>
+                            <!-- Gradient text with fallback for email clients that don't support it -->
+                            <h1 style="margin: 0; font-size: 36px; font-weight: 800; background: linear-gradient(135deg, #9c0abf 0%, #c77ddb 25%, #1bdc6f 75%, #14b85c 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; color: #9c0abf;">
+                                {month_name} Wrapped
                             </h1>
-                            <p style="margin: 0; color: #8a8a9a; font-size: 16px;">
+                            <p style="margin: 16px 0 0 0; color: #6a6a7a; font-size: 15px;">
                                 Here's a sneak peek at your listening highlights
                             </p>
-                        </td>
-                    </tr>
-                    
-                    <!-- Stats Preview Bar -->
-                    <tr>
-                        <td style="background: linear-gradient(135deg, #9c0abf 0%, #1bdc6f 100%); padding: 3px;">
-                            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background: #121225;">
-                                <tr>
-                                    <td style="padding: 16px 32px;">
-                                        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-                                            <tr>
-                                                <td width="33%" align="center" style="color: #ffffff;">
-                                                    <div style="font-size: 24px; font-weight: 700; color: #1bdc6f;">{len(top_songs)}</div>
-                                                    <div style="font-size: 11px; color: #8a8a9a; text-transform: uppercase; letter-spacing: 0.5px;">Top Songs</div>
-                                                </td>
-                                                <td width="33%" align="center" style="color: #ffffff;">
-                                                    <div style="font-size: 24px; font-weight: 700; color: #9c0abf;">{len(top_artists)}</div>
-                                                    <div style="font-size: 11px; color: #8a8a9a; text-transform: uppercase; letter-spacing: 0.5px;">Top Artists</div>
-                                                </td>
-                                                <td width="33%" align="center" style="color: #ffffff;">
-                                                    <div style="font-size: 24px; font-weight: 700; color: #1bdc6f;">{len(top_genres)}</div>
-                                                    <div style="font-size: 11px; color: #8a8a9a; text-transform: uppercase; letter-spacing: 0.5px;">Top Genres</div>
-                                                </td>
-                                            </tr>
-                                        </table>
-                                    </td>
-                                </tr>
-                            </table>
                         </td>
                     </tr>
                     

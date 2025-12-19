@@ -344,7 +344,7 @@ class TrackList:
             else:  # Full date
                 target_date = datetime.strptime(target_date_str[:10], '%Y-%m-%d').date()
                 difference_in_days = (today - target_date).days
-                return 0 <= difference_in_days <= 7
+                return 0 <= difference_in_days < 7
                 
         except Exception as err:
             log.warning(f"Error parsing date '{target_date_str}': {err}")
