@@ -1,8 +1,8 @@
 import requests
 import aiohttp
 from lambdas.common.track_list import TrackList
-from lambdas.common.logger import get_logger
 from lambdas.common.aiohttp_helper import fetch_json
+from lambdas.common.logger import get_logger
 
 log = get_logger(__file__)
 
@@ -49,49 +49,98 @@ class ArtistList:
             raise Exception(f"AIOHTTP Get Followed Artists Latest Release: {err}") from err
 
     # ------------------------
-    # Get Followed Artists
+    # Get Followed Artists (FIXED - uses cursor pagination)
     # ------------------------
     async def get_followed_artists(self):
+        """
+        Get ALL followed artists using cursor-based pagination.
+        
+        The /me/following endpoint uses cursor pagination with 'after' parameter,
+        NOT a 'next' URL like other Spotify endpoints.
+        """
         try:
             log.info("Getting followed artists...")
             artist_ids = []
+            after_cursor = None
 
-            url = f"{self.BASE_URL}/me/following?type=artist&limit=50"
-            
-            while url:
+            while True:
+                # Build URL with cursor if we have one
+                url = f"{self.BASE_URL}/me/following?type=artist&limit=50"
+                if after_cursor:
+                    url += f"&after={after_cursor}"
+                
                 response = requests.get(url, headers=self.headers)
                 response_data = response.json()
 
                 if response.status_code != 200:
                     raise Exception(f"Error fetching followed artists: {response_data}")
                 
-                ids = [artist['id'] for artist in response_data['artists']['items']]
+                artists = response_data.get('artists', {})
+                items = artists.get('items', [])
+                
+                if not items:
+                    break
+                    
+                ids = [artist['id'] for artist in items]
                 artist_ids.extend(ids)
                 
-                # Get next page URL or None
-                url = response_data['artists'].get('next')
+                # Get cursor for next page
+                cursors = artists.get('cursors', {})
+                after_cursor = cursors.get('after')
+                
+                log.info(f"Fetched {len(items)} artists (total so far: {len(artist_ids)})")
+                
+                # If no cursor or fewer items than limit, we're done
+                if not after_cursor or len(items) < 50:
+                    break
             
             self.artist_id_list = artist_ids
-            log.info(f"Found {len(artist_ids)} followed artists!")
+            log.info(f"Found {len(artist_ids)} total followed artists!")
         except Exception as err:
             log.error(f"Get Followed Artists: {err}")
             raise Exception(f"Get Followed Artists: {err}") from err
     
     async def aiohttp_get_followed_artists(self):
+        """
+        Get ALL followed artists using cursor-based pagination (async version).
+        
+        The /me/following endpoint uses cursor pagination with 'after' parameter,
+        NOT a 'next' URL like other Spotify endpoints.
+        """
         try:
             log.info("Getting followed artists (aiohttp)...")
-            url = f"{self.BASE_URL}/me/following?type=artist&limit=50"
-            
             artist_ids = []
-
-            while url:
+            after_cursor = None
+            
+            while True:
+                # Build URL with cursor if we have one
+                url = f"{self.BASE_URL}/me/following?type=artist&limit=50"
+                if after_cursor:
+                    url += f"&after={after_cursor}"
+                
                 data = await fetch_json(self.aiohttp_session, url, headers=self.headers)
-                ids = [artist['id'] for artist in data['artists']['items']]
+                
+                artists = data.get('artists', {})
+                items = artists.get('items', [])
+                
+                if not items:
+                    break
+                
+                ids = [artist['id'] for artist in items]
                 artist_ids.extend(ids)
-                url = data["artists"].get("next")
+                
+                # Get cursor for next page
+                cursors = artists.get('cursors', {})
+                after_cursor = cursors.get('after')
+                
+                log.info(f"Fetched {len(items)} artists (total so far: {len(artist_ids)})")
+                
+                # If no cursor or fewer items than limit, we're done
+                if not after_cursor or len(items) < 50:
+                    break
 
             self.artist_id_list = artist_ids
-            log.info(f"Found {len(artist_ids)} followed artists!")
+            log.info(f"Found {len(artist_ids)} total followed artists!")
         except Exception as err:
             log.error(f"AIOHTTP Get Followed Artists: {err}")
             raise Exception(f"AIOHTTP Get Followed Artists: {err}") from err
