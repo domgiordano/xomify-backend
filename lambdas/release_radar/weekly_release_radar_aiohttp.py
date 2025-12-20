@@ -58,7 +58,8 @@ async def aiohttp_release_radar_chron_job(event) -> tuple[list, list]:
             failures.append({"email": email, "error": str(result)})
         else:
             track_count = result.get('tracks', 0)
-            log.info(f"✅ {email}: {track_count} tracks added")
+            artist_count = result.get('artists', 0)
+            log.info(f"✅ {email}: {track_count} tracks from {artist_count} artists")
             successes.append(email)
     
     log.info("=" * 50)
@@ -79,7 +80,7 @@ async def process_release_radar_user(user: dict, session: aiohttp.ClientSession)
         session: aiohttp session for API calls
         
     Returns:
-        Dict with email and track count
+        Dict with email, track count, artist count, and release window
         
     Raises:
         ReleaseRadarError: If processing fails
@@ -98,6 +99,11 @@ async def process_release_radar_user(user: dict, session: aiohttp.ClientSession)
         await spotify.followed_artists.aiohttp_get_followed_artists()
         artist_count = len(spotify.followed_artists.artist_id_list)
         log.info(f"[{email}] Found {artist_count} followed artists")
+        
+        # Log some sample artist IDs for debugging
+        if artist_count > 0:
+            sample_ids = spotify.followed_artists.artist_id_list[:5]
+            log.debug(f"[{email}] Sample artist IDs: {sample_ids}")
         
         # Get new releases (this can take a while)
         log.info(f"[{email}] Scanning for new releases...")
@@ -123,7 +129,11 @@ async def process_release_radar_user(user: dict, session: aiohttp.ClientSession)
             )
         
         log.info(f"[{email}] ✅ Release radar complete!")
-        return {"email": email, "tracks": track_count}
+        return {
+            "email": email, 
+            "tracks": track_count,
+            "artists": artist_count
+        }
         
     except Exception as err:
         log.error(f"[{email}] ❌ Failed: {err}")

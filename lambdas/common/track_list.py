@@ -97,6 +97,7 @@ class TrackList:
     async def get_artist_latest_release(self, artist_id_list: list):
         try:
             log.info("Getting artist releases within the last week...")
+            
             tasks = [self.get_latest_releases(artist_id) for artist_id in artist_id_list]
             artist_latest_release_uris = await asyncio.gather(*tasks)
             combined_artist_latest_release_uris = [item for sublist in artist_latest_release_uris for item in sublist]
@@ -128,23 +129,25 @@ class TrackList:
             # Process in batches to avoid overwhelming the API
             batch_size = 20
             all_release_uris = []
+            artists_with_releases = 0
             
             for i in range(0, len(artist_id_list), batch_size):
                 batch = artist_id_list[i:i + batch_size]
                 tasks = [self.aiohttp_get_latest_releases(artist_id) for artist_id in batch]
                 batch_results = await asyncio.gather(*tasks, return_exceptions=True)
                 
-                for result in batch_results:
+                for idx, result in enumerate(batch_results):
                     if isinstance(result, Exception):
-                        log.warning(f"Failed to get releases for an artist: {result}")
-                    else:
+                        log.warning(f"Failed to get releases for artist {batch[idx]}: {result}")
+                    elif result:  # Non-empty list
+                        artists_with_releases += 1
                         all_release_uris.extend(result)
                 
                 # Small delay between batches to be nice to the API
                 if i + batch_size < len(artist_id_list):
                     await asyncio.sleep(0.5)
             
-            log.info(f"Found {len(all_release_uris)} new release URIs from all artists")
+            log.info(f"Found {len(all_release_uris)} new release URIs from {artists_with_releases} artists")
 
             # Split into tracks and albums
             self.track_uri_list, temp_album_uri_list = self.__split_spotify_uris(all_release_uris)
@@ -166,32 +169,36 @@ class TrackList:
     
     async def get_latest_releases(self, artist_id: str):
         """
-        Get all releases from an artist within the last 7 days.
-        Fetches multiple albums at once instead of one-by-one recursion.
+        Get all releases from an artist within the release window.
+        
+        Makes separate API calls for each include_group type because Spotify
+        sorts by release_date WITHIN each group, not across all groups.
         """
         try:
-            # FIXED: Removed quotes around include_groups, fixed URL format, increased limit
-            include_groups = "album,single,appears_on,compilation"
-            url = f"{self.BASE_URL}/artists/{artist_id}/albums?include_groups={include_groups}&limit=10"
-
-            response = requests.get(url, headers=self.headers)
-            response_data = response.json()
-
-            if response.status_code == 429:
-                retry_after = int(response.headers.get('Retry-After', 1))
-                log.warning(f"Rate limit reached. Retrying after {retry_after} seconds...")
-                time.sleep(retry_after + 1)
-                return await self.get_latest_releases(artist_id)
-            
-            if response.status_code != 200:
-                raise Exception(f"Error fetching artist albums: {response_data}")
-            
             release_uris = []
-            for release in response_data.get('items', []):
-                release_date = release.get('release_date', '')
-                if self.__is_within_release_week(release_date):
-                    log.debug(f"New release: {release['name']} ({release_date})")
-                    release_uris.append(release['uri'])
+            include_groups = ["album", "single", "appears_on"]
+            
+            for group in include_groups:
+                url = f"{self.BASE_URL}/artists/{artist_id}/albums?include_groups={group}&limit=5"
+
+                response = requests.get(url, headers=self.headers)
+                response_data = response.json()
+
+                if response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 1))
+                    log.warning(f"Rate limit reached. Retrying after {retry_after} seconds...")
+                    time.sleep(retry_after + 1)
+                    return await self.get_latest_releases(artist_id)
+                
+                if response.status_code != 200:
+                    log.warning(f"Error fetching {group} for artist {artist_id}: {response_data}")
+                    continue
+                
+                for release in response_data.get('items', []):
+                    release_date = release.get('release_date', '')
+                    if self.__is_within_release_week(release_date):
+                        log.debug(f"New {group}: {release['name']} ({release_date})")
+                        release_uris.append(release['uri'])
             
             return release_uris
 
@@ -201,22 +208,37 @@ class TrackList:
     
     async def aiohttp_get_latest_releases(self, artist_id: str):
         """
-        Get all releases from an artist within the last 7 days.
-        FIXED: Proper URL formatting, fetch multiple at once.
+        Get all releases from an artist within the release window.
+        
+        Makes separate API calls for each include_group type because Spotify
+        sorts by release_date WITHIN each group, not across all groups.
+        With a single call using include_groups=album,single, you'd get
+        albums first (sorted by date) then singles (sorted by date) - 
+        meaning recent singles could be pushed past the limit.
         """
         try:
-            # FIXED: Removed quotes, fixed URL params, increased limit to catch more releases
-            include_groups = "album,single,appears_on,compilation"
-            url = f"{self.BASE_URL}/artists/{artist_id}/albums?include_groups={include_groups}&limit=10"
-
-            data = await fetch_json(self.aiohttp_session, url, headers=self.headers)
-
             release_uris = []
-            for release in data.get('items', []):
-                release_date = release.get('release_date', '')
-                if self.__is_within_release_week(release_date):
-                    log.debug(f"New release found: {release['name']} - {release_date}")
-                    release_uris.append(release['uri'])
+            
+            # Query each type separately to ensure we get recent releases of each type
+            # Spotify sorts by release_date within each group, not across groups
+            include_groups = ["album", "single", "appears_on"]
+            
+            for group in include_groups:
+                url = f"{self.BASE_URL}/artists/{artist_id}/albums?include_groups={group}&limit=5"
+                
+                try:
+                    data = await fetch_json(self.aiohttp_session, url, headers=self.headers)
+                    
+                    for release in data.get('items', []):
+                        release_date = release.get('release_date', '')
+                        release_name = release.get('name', 'Unknown')
+                        
+                        if self.__is_within_release_week(release_date):
+                            log.info(f"🎵 New {group}: {release_name} - {release_date}")
+                            release_uris.append(release['uri'])
+                except Exception as group_err:
+                    log.warning(f"Failed to get {group} releases for artist {artist_id}: {group_err}")
+                    continue
             
             return release_uris
         except Exception as err:
@@ -224,7 +246,7 @@ class TrackList:
             return []  # Return empty instead of raising to not break the whole batch
     
     # ------------------------
-    # Get Tracks from Album (FIXED)
+    # Get Tracks from Album
     # ------------------------
     async def get_album_tracks(self, album_uri: str):
         try:
@@ -255,7 +277,6 @@ class TrackList:
     async def get_several_albums_tracks(self):
         """
         Batch fetch album details and extract all tracks.
-        FIXED: Now gets ALL tracks from singles too, not just the first one.
         """
         try:
             album_ids = [uri.split(":")[2] for uri in self.album_uri_list]
@@ -276,7 +297,6 @@ class TrackList:
                 for album in response_data.get("albums", []):
                     if not album or "tracks" not in album:
                         continue
-                    # FIXED: Get ALL tracks from the album, regardless of type
                     for track in album["tracks"].get("items", []):
                         track_uris.append(track["uri"])
 
@@ -288,7 +308,6 @@ class TrackList:
     async def aiohttp_get_several_albums_tracks(self):
         """
         Batch fetch album details and extract all tracks.
-        FIXED: Now gets ALL tracks from all album types.
         """
         try:
             album_ids = [uri.split(":")[2] for uri in self.album_uri_list]
@@ -310,7 +329,6 @@ class TrackList:
                     album_name = album.get('name', 'Unknown')
                     album_tracks = album["tracks"].get("items", [])
                     
-                    # FIXED: Get ALL tracks from every album type
                     for track in album_tracks:
                         track_uris.append(track["uri"])
                     
@@ -327,35 +345,48 @@ class TrackList:
     # ------------------------
     def __is_within_release_week(self, target_date_str: str) -> bool:
         """
-        Include releases from last Saturday through today.
-        Excludes last Friday and earlier.
+        Check if a release date falls within our release window.
+        
+        Window: Last Saturday through today (Friday when cron runs)
+        Example: If today is Friday Dec 19, window is Sat Dec 14 - Fri Dec 19
+        This excludes the previous Friday (Dec 13).
         """
         try:
             if not target_date_str or len(target_date_str) < 4:
                 return False
 
             today = datetime.today().date()
-            start_date = self._most_recent_saturday(today)
-
-            # Spotify date formats
+            
+            # Find last Saturday
+            # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+            days_since_saturday = (today.weekday() - 5) % 7
+            if days_since_saturday == 0 and today.weekday() != 5:
+                # If result is 0 but today isn't Saturday, we need to go back 7 days
+                days_since_saturday = 7
+            last_saturday = today - timedelta(days=days_since_saturday)
+            
+            # Parse release date based on format
             if len(target_date_str) == 4:
-                return False  # year only → ignore
+                # Year only (e.g., "2024") - can't determine week, skip
+                return False
             elif len(target_date_str) == 7:
-                # Treat year-month as first of month (Spotify limitation)
+                # Year-month only (e.g., "2024-12") - treat as first of month
                 target_date = datetime.strptime(target_date_str, "%Y-%m").date()
             else:
+                # Full date (e.g., "2024-12-19")
                 target_date = datetime.strptime(target_date_str[:10], "%Y-%m-%d").date()
 
-            return start_date <= target_date <= today
+            # Window: last_saturday <= target_date <= today
+            is_in_window = last_saturday <= target_date <= today
+            
+            if is_in_window:
+                log.debug(f"✅ Release {target_date_str} is in window [{last_saturday} - {today}]")
+            
+            return is_in_window
                 
         except Exception as err:
             log.warning(f"Error parsing date '{target_date_str}': {err}")
             return False
-    
-    def _most_recent_saturday(self, today: date) -> date:
-        # Monday=0 ... Saturday=5 ... Sunday=6
-        days_since_saturday = (today.weekday() - 5) % 7
-        return today - timedelta(days=days_since_saturday)
 
     def __split_spotify_uris(self, uris: list) -> tuple:
         """Split URIs into tracks and albums."""
