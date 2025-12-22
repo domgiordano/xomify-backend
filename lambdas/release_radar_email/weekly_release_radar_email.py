@@ -59,7 +59,7 @@ async def release_radar_email_cron_job(event) -> dict:
             
             releases = week_data.get('releases', [])
             stats = week_data.get('stats', {})
-            playlist_id = user.get('releasRadarId')
+            playlist_id = user.get('releaseRadarId')
             
             # Skip if no releases
             if not releases or stats.get('totalTracks', 0) == 0:
