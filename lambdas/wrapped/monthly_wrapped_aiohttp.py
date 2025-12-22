@@ -172,7 +172,8 @@ async def process_wrapped_user(user: dict, session: aiohttp.ClientSession, month
             month_key=month_key,
             top_song_ids=top_tracks,
             top_artist_ids=top_artists,
-            top_genres=top_genres
+            top_genres=top_genres,
+            playlist_id=spotify.monthly_spotify_playlist.id
         )
         
         # Update user timestamp

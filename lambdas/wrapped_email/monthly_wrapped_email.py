@@ -126,6 +126,10 @@ async def process_user_email(user: dict, session: aiohttp.ClientSession, month_k
         top_artist_ids = wrapped_data.get('topArtistIds', {}).get('short_term', [])[:5]
         top_genres_dict = wrapped_data.get('topGenres', {}).get('short_term', {})
         
+        # Playlist ID / URL
+        playlist_id = wrapped_data.get('playlistId', None)
+        wrapped_playlist_url = f"https://open.spotify.com/playlist/{playlist_id}" if playlist_id else XOMIFY_URL
+
         # Convert genres dict to sorted list
         if isinstance(top_genres_dict, dict):
             top_genres_list = sorted(top_genres_dict.items(), key=lambda x: x[1], reverse=True)[:5]
@@ -147,7 +151,7 @@ async def process_user_email(user: dict, session: aiohttp.ClientSession, month_k
             top_songs=top_songs,
             top_artists=top_artists,
             top_genres=top_genres,
-            xomify_url=XOMIFY_URL,
+            xomify_url=wrapped_playlist_url,
             unsubscribe_url=f"{XOMIFY_URL}/unsubscribe?email={email}"
         )
         

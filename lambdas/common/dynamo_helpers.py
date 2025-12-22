@@ -338,7 +338,8 @@ def save_monthly_wrap(
     month_key: str,
     top_song_ids: dict,
     top_artist_ids: dict,
-    top_genres: dict
+    top_genres: dict,
+    playlist_id: str = None
 ) -> dict:
     """
     Save a single month's wrapped data to the history table.
@@ -361,6 +362,7 @@ def save_monthly_wrap(
             'topSongIds': top_song_ids,
             'topArtistIds': top_artist_ids,
             'topGenres': top_genres,
+            'playlistId': playlist_id,
             'createdAt': _get_timestamp()
         }
         
