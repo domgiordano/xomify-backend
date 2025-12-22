@@ -17,7 +17,7 @@ from lambdas.common.constants import XOMIFY_URL
 
 log = get_logger(__file__)
 
-def release_radar_email_cron_job(event) -> dict:
+async def release_radar_email_cron_job(event) -> dict:
     """
     Main entry point for sending release radar emails.
     
@@ -59,7 +59,7 @@ def release_radar_email_cron_job(event) -> dict:
             
             releases = week_data.get('releases', [])
             stats = week_data.get('stats', {})
-            playlist_id = week_data.get('playlistId')
+            playlist_id = user.get('releasRadarId')
             
             # Skip if no releases
             if not releases or stats.get('totalTracks', 0) == 0:

@@ -36,7 +36,7 @@ def handler(event, context):
 
     successes, failures, skipped = asyncio.run(release_radar_email_cron_job(event))
 
-    log.info(f"✅ Release radar email complete - {len(successes)} sent, {len(failures)} failed")
+    log.info(f"✅ Release radar email complete - {successes} sent, {failures} failed, {skipped} skipped")
     
     return success_response(
         {

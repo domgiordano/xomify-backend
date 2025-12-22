@@ -63,6 +63,7 @@ def handler(event, context):
             response = update_user_table_refresh_token(
                 body['email'],
                 body['userId'],
+                body['displayName'],
                 body['refreshToken']
             )
             log.info(f"Updated refresh token for {body['email']}")

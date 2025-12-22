@@ -243,7 +243,7 @@ def _get_timestamp() -> str:
     return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 
-def update_user_table_refresh_token(email: str, user_id: str, refresh_token: str) -> dict:
+def update_user_table_refresh_token(email: str, user_id: str, display_name: str, refresh_token: str) -> dict:
     """
     Update or create user with new refresh token.
     """
@@ -255,6 +255,7 @@ def update_user_table_refresh_token(email: str, user_id: str, refresh_token: str
         # Update fields
         user['email'] = email
         user['userId'] = user_id
+        user['displayName'] = display_name
         user['refreshToken'] = refresh_token
         user['active'] = True
         user['updatedAt'] = _get_timestamp()
