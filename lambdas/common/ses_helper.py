@@ -3,6 +3,11 @@ from botocore.exceptions import ClientError
 from lambdas.common.constants import FROM_EMAIL, AWS_DEFAULT_REGION
 from lambdas.common.logger import get_logger
 
+from lambdas.common.release_radar_email_template import (
+    generate_release_radar_email,
+    generate_release_radar_email_plain_text
+)
+
 log = get_logger(__file__)
 
 ses_client = boto3.client('ses', region_name=AWS_DEFAULT_REGION)
@@ -94,3 +99,90 @@ def get_send_quota() -> dict:
     except Exception as err:
         log.error(f"Error getting send quota: {err}")
         return {}
+    
+## RELEASE RADAR EMAIL ##
+def send_release_radar_email(
+    to_email: str,
+    user_name: str,
+    week_key: str,
+    stats: dict,
+    releases: list,
+    playlist_url: str
+) -> bool:
+    """
+    Send a single release radar email.
+    
+    Args:
+        to_email: Recipient email address
+        user_name: User's display name
+        week_key: Week key for display
+        stats: Release statistics
+        releases: List of releases for preview
+        playlist_url: URL to the playlist
+        
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    try:
+        # Generate email content
+        html_body = generate_release_radar_email(
+            user_name=user_name,
+            week_key=week_key,
+            stats=stats,
+            releases=releases,
+            playlist_url=playlist_url
+        )
+        
+        text_body = generate_release_radar_email_plain_text(
+            user_name=user_name,
+            week_key=week_key,
+            stats=stats,
+            releases=releases,
+            playlist_url=playlist_url
+        )
+        
+        # Build subject line
+        track_count = stats.get('totalTracks', 0)
+        subject = f"📻 {track_count} new releases from artists you follow!"
+        
+        # Send via SES
+        response = ses_client.send_email(
+            Source=FROM_EMAIL,
+            Destination={
+                'ToAddresses': [to_email]
+            },
+            Message={
+                'Subject': {
+                    'Data': subject,
+                    'Charset': 'UTF-8'
+                },
+                'Body': {
+                    'Text': {
+                        'Data': text_body,
+                        'Charset': 'UTF-8'
+                    },
+                    'Html': {
+                        'Data': html_body,
+                        'Charset': 'UTF-8'
+                    }
+                }
+            },
+            Tags=[
+                {'Name': 'EmailType', 'Value': 'ReleaseRadar'},
+                {'Name': 'WeekKey', 'Value': week_key}
+            ]
+        )
+        
+        message_id = response.get('MessageId')
+        log.info(f"Email sent to {to_email}, MessageId: {message_id}")
+        return True
+        
+    except ClientError as err:
+        error_code = err.response['Error']['Code']
+        error_msg = err.response['Error']['Message']
+        log.error(f"SES error sending to {to_email}: {error_code} - {error_msg}")
+        return False
+        
+    except Exception as err:
+        log.error(f"Error sending email to {to_email}: {err}")
+        return False
