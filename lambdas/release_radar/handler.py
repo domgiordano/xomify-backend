@@ -13,7 +13,6 @@ import json
 import asyncio
 
 from lambdas.common.logger import get_logger
-from lambdas.common.errors import NotFoundError, ValidationError, handle_errors
 from lambdas.common.release_radar_dynamo import (
     get_user_release_radar_history,
     get_release_radar_week,
@@ -21,7 +20,7 @@ from lambdas.common.release_radar_dynamo import (
     check_user_has_history,
     get_week_key
 )
-from lambdas.release_radar.release_radar_backfill import backfill_release_radar_history
+from release_radar_backfill import backfill_release_radar_history
 
 log = get_logger(__file__)
 
