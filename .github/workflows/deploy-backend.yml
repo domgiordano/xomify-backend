@@ -23,15 +23,17 @@ jobs:
       - name: Package Lambda functions
         run: |
           cd lambdas/authorizer
-          zip -r ../../authorizer.zip *  # Zips only the contents of the folder without including 'lambdas'
+          zip -r ../../authorizer.zip *
           cd ../wrapped
-          zip -r ../../wrapped.zip *  # Zips only the contents of the folder without including 'lambdas'
+          zip -r ../../wrapped.zip *
           cd ../release_radar
-          zip -r ../../release_radar.zip *  # Zips only the contents of the folder without including 'lambdas'
+          zip -r ../../release_radar.zip *
           cd ../update_user_table
-          zip -r ../../update_user_table.zip *  # Zips only the contents of the folder without including 'lambdas'
+          zip -r ../../update_user_table.zip *
           cd ../wrapped_email
-          zip -r ../../wrapped_email.zip *  # Zips only the contents of the folder without including 'lambdas'
+          zip -r ../../wrapped_email.zip *
+          cd ../release_radar_email
+          zip -r ../../release_radar_email.zip *
           cd ../..
           mkdir -p python/lambdas
           cp -r lambdas/common python/lambdas/
@@ -166,5 +168,28 @@ jobs:
         run: |
           aws lambda update-function-configuration \
             --function-name xomify-wrapped-email \
+            --layers $LAYER_ARN \
+            --region $AWS_REGION
+
+      - name: Deploy Release Radar Email Lambda Function Code
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: "us-east-1"
+        run: |
+          aws lambda update-function-code \
+            --function-name xomify-release-radar-email \
+            --zip-file fileb://release_radar_email.zip
+          sleep 5
+
+      - name: Deploy Release Radar Email Lambda Configurations
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: "us-east-1"
+          LAYER_ARN: ${{ env.LAYER_ARN }}
+        run: |
+          aws lambda update-function-configuration \
+            --function-name xomify-release-radar-email \
             --layers $LAYER_ARN \
             --region $AWS_REGION
