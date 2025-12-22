@@ -19,6 +19,7 @@ LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 DYNAMODB_KMS_ALIAS = os.environ['DYNAMODB_KMS_ALIAS']
 USERS_TABLE_NAME = os.environ['USERS_TABLE_NAME']
 WRAPPED_HISTORY_TABLE_NAME = os.environ['WRAPPED_HISTORY_TABLE_NAME']
+RELEASE_RADAR_HISTORY_TABLE_NAME = os.environ['RELEASE_RADAR_HISTORY_TABLE_NAME']
 
 # Email Service
 FROM_EMAIL = os.environ.get('FROM_EMAIL', 'noreply@xomify.com')

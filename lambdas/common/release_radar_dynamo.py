@@ -19,11 +19,9 @@ from decimal import Decimal
 
 from lambdas.common.logger import get_logger
 from lambdas.common.errors import DynamoDBError
+from lambdas.common.constants import RELEASE_RADAR_HISTORY_TABLE_NAME
 
 log = get_logger(__file__)
-
-# Table name - add to constants.py
-RELEASE_RADAR_HISTORY_TABLE_NAME = "xomify-release-radar-history"
 
 # Initialize DynamoDB
 dynamodb = boto3.resource("dynamodb", region_name="us-east-1")
