@@ -23,6 +23,11 @@ class TrackList:
         self.final_tracks_uris: list = []
         self.track_id_list: list = []
         self.number_of_tracks: int = 0
+        
+        # Custom date window (set by cron for specific week processing)
+        # If None, uses dynamic "current week" calculation
+        self.week_start: datetime = None
+        self.week_end: datetime = None
     
     # ------------------------
     # Shared Methods
@@ -125,6 +130,12 @@ class TrackList:
     async def aiohttp_get_artist_latest_release(self, artist_id_list: list):
         try:
             log.info(f"Getting releases for {len(artist_id_list)} followed artists...")
+            
+            # Log the date window being used
+            if self.week_start and self.week_end:
+                log.info(f"Using custom date window: {self.week_start.strftime('%Y-%m-%d')} to {self.week_end.strftime('%Y-%m-%d')}")
+            else:
+                log.info("Using dynamic current week calculation")
             
             # Process in batches to avoid overwhelming the API
             batch_size = 20
@@ -347,23 +358,30 @@ class TrackList:
         """
         Check if a release date falls within our release window.
         
-        Window: Last Saturday through today (Friday when cron runs)
-        Example: If today is Friday Dec 19, window is Sat Dec 14 - Fri Dec 19
-        This excludes the previous Friday (Dec 13).
+        If custom week_start/week_end are set (by cron), use those.
+        Otherwise, calculate the current Sunday-Saturday week dynamically.
+        
+        Week Definition: Sunday 00:00:00 to Saturday 23:59:59
         """
         try:
             if not target_date_str or len(target_date_str) < 4:
                 return False
 
-            today = datetime.today().date()
-            
-            # Find last Saturday
-            # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-            days_since_saturday = (today.weekday() - 5) % 7
-            if days_since_saturday == 0 and today.weekday() != 5:
-                # If result is 0 but today isn't Saturday, we need to go back 7 days
-                days_since_saturday = 7
-            last_saturday = today - timedelta(days=days_since_saturday)
+            # Use custom date window if set, otherwise calculate current week
+            if self.week_start and self.week_end:
+                start_date = self.week_start.date() if hasattr(self.week_start, 'date') else self.week_start
+                end_date = self.week_end.date() if hasattr(self.week_end, 'date') else self.week_end
+            else:
+                # Calculate current Sunday-Saturday week
+                today = datetime.today().date()
+                
+                # Find last Sunday (start of current week)
+                # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
+                days_since_sunday = (today.weekday() + 1) % 7  # Sun=0, Mon=1, ..., Sat=6
+                start_date = today - timedelta(days=days_since_sunday)
+                
+                # End date is Saturday (6 days after Sunday)
+                end_date = start_date + timedelta(days=6)
             
             # Parse release date based on format
             if len(target_date_str) == 4:
@@ -376,11 +394,11 @@ class TrackList:
                 # Full date (e.g., "2024-12-19")
                 target_date = datetime.strptime(target_date_str[:10], "%Y-%m-%d").date()
 
-            # Window: last_saturday <= target_date <= today
-            is_in_window = last_saturday <= target_date <= today
+            # Window: start_date <= target_date <= end_date
+            is_in_window = start_date <= target_date <= end_date
             
             if is_in_window:
-                log.debug(f"✅ Release {target_date_str} is in window [{last_saturday} - {today}]")
+                log.debug(f"✅ Release {target_date_str} is in window [{start_date} - {end_date}]")
             
             return is_in_window
                 

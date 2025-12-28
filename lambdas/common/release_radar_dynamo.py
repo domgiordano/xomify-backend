@@ -9,7 +9,12 @@ Table Structure:
 - releases: list of release objects
 - stats: { totalTracks, albumCount, singleCount, appearsOnCount }
 - playlistId: string
+- finalized: boolean (True after cron runs, False during week)
+- lastUpdated: date string "YYYY-MM-DD" (for daily refresh check)
 - createdAt: ISO timestamp
+
+Week Definition: Sunday 00:00:00 to Saturday 23:59:59
+- Cron runs Sunday ~2 AM and processes the PREVIOUS week (last Sun-Sat)
 """
 
 from datetime import datetime, timezone, timedelta
@@ -32,16 +37,25 @@ def _get_timestamp() -> str:
     return datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
 
+def _get_today_date() -> str:
+    """Get current date as YYYY-MM-DD string."""
+    return datetime.now(timezone.utc).strftime('%Y-%m-%d')
+
+
+# ============================================
+# Week Key Calculations (Sunday-Saturday)
+# ============================================
+
 def get_week_key(target_date: datetime = None) -> str:
     """
     Get the week key for a given date in YYYY-WW format.
     
-    Uses Saturday-Friday weeks:
-    - Week starts on Saturday
-    - Week ends on Friday
+    Uses Sunday-Saturday weeks:
+    - Week starts on Sunday 00:00:00
+    - Week ends on Saturday 23:59:59
     
     Args:
-        target_date: Date to get week key for (defaults to today)
+        target_date: Date to get week key for (defaults to now)
         
     Returns:
         Week key string like "2024-51"
@@ -49,43 +63,112 @@ def get_week_key(target_date: datetime = None) -> str:
     if target_date is None:
         target_date = datetime.now()
     
-    # Find the Saturday that starts this week
+    # If target_date is a date (not datetime), convert it
+    if hasattr(target_date, 'hour'):
+        d = target_date
+    else:
+        d = datetime.combine(target_date, datetime.min.time())
+    
+    # Find the Sunday that starts this week
     # weekday(): Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6
-    days_since_saturday = (target_date.weekday() - 5) % 7
-    if days_since_saturday == 0 and target_date.weekday() != 5:
-        days_since_saturday = 7
+    days_since_sunday = (d.weekday() + 1) % 7  # Sun=0, Mon=1, ..., Sat=6
+    week_start_sunday = d - timedelta(days=days_since_sunday)
     
-    week_start_saturday = target_date - timedelta(days=days_since_saturday)
-    
-    # Get ISO week number of that Saturday
-    iso_year, iso_week, _ = week_start_saturday.isocalendar()
+    # Get ISO week number using Thursday of our week (ISO standard)
+    thursday_of_week = week_start_sunday + timedelta(days=4)
+    iso_year, iso_week, _ = thursday_of_week.isocalendar()
     
     return f"{iso_year}-{iso_week:02d}"
 
 
+def get_previous_week_key() -> str:
+    """
+    Get the week key for the PREVIOUS week (the one that just ended).
+    
+    Used by the cron job which runs Sunday morning to process
+    the week that ended Saturday night.
+    
+    Returns:
+        Week key for last Sunday-Saturday
+    """
+    # Go back 1 day to get into the previous week
+    yesterday = datetime.now() - timedelta(days=1)
+    return get_week_key(yesterday)
+
+
 def get_week_date_range(week_key: str) -> tuple[datetime, datetime]:
     """
-    Get the Saturday-Friday date range for a week key.
+    Get the Sunday-Saturday date range for a week key.
     
     Args:
         week_key: Week key in "YYYY-WW" format
         
     Returns:
         Tuple of (start_date, end_date) as datetime objects
+        start_date = Sunday 00:00:00
+        end_date = Saturday 23:59:59
     """
     year, week = map(int, week_key.split('-'))
     
-    # Find the first day of that ISO week (Monday)
+    # Find Monday of that ISO week
     jan_4 = datetime(year, 1, 4)  # Jan 4 is always in week 1
-    start_of_week_1 = jan_4 - timedelta(days=jan_4.weekday())
+    start_of_week_1 = jan_4 - timedelta(days=jan_4.weekday())  # Monday of week 1
     monday_of_week = start_of_week_1 + timedelta(weeks=week - 1)
     
-    # Our week starts on Saturday (5 days before Monday of next week, or 2 days before this Monday... wait)
-    # Actually, Saturday before this Monday
-    saturday = monday_of_week - timedelta(days=2)
-    friday = saturday + timedelta(days=6)
+    # Our week starts on Sunday (1 day before Monday)
+    sunday = monday_of_week - timedelta(days=1)
+    sunday = sunday.replace(hour=0, minute=0, second=0, microsecond=0)
     
-    return saturday, friday
+    # Saturday is 6 days after Sunday
+    saturday = sunday + timedelta(days=6)
+    saturday = saturday.replace(hour=23, minute=59, second=59, microsecond=999999)
+    
+    return sunday, saturday
+
+
+def get_current_week_date_range() -> tuple[datetime, datetime]:
+    """
+    Get the date range for the current (incomplete) week.
+    
+    Returns:
+        Tuple of (start_date, end_date) for current week
+    """
+    current_week_key = get_week_key()
+    return get_week_date_range(current_week_key)
+
+
+def is_release_in_week(release_date_str: str, week_key: str) -> bool:
+    """
+    Check if a release date falls within a specific week.
+    
+    Args:
+        release_date_str: Release date string (YYYY-MM-DD, YYYY-MM, or YYYY)
+        week_key: Week key in "YYYY-WW" format
+        
+    Returns:
+        True if release is within the week
+    """
+    try:
+        if not release_date_str or len(release_date_str) < 4:
+            return False
+        
+        start_date, end_date = get_week_date_range(week_key)
+        
+        # Parse release date based on format
+        if len(release_date_str) == 4:
+            # Year only - can't determine week
+            return False
+        elif len(release_date_str) == 7:
+            # Year-month only - treat as first of month
+            release_date = datetime.strptime(release_date_str, "%Y-%m")
+        else:
+            # Full date
+            release_date = datetime.strptime(release_date_str[:10], "%Y-%m-%d")
+        
+        return start_date <= release_date <= end_date
+        
+    except Exception:
+        return False
 
 
 # ============================================
@@ -96,7 +179,8 @@ def save_release_radar_week(
     email: str,
     week_key: str,
     releases: list,
-    playlist_id: str = None
+    playlist_id: str = None,
+    finalized: bool = False
 ) -> dict:
     """
     Save a single week's release radar data to the history table.
@@ -104,49 +188,46 @@ def save_release_radar_week(
     Args:
         email: User's email (partition key)
         week_key: Format "YYYY-WW" (sort key)
-        releases: List of release objects with structure:
-            {
-                id: string,
-                name: string,
-                artists: [{ id, name }],
-                images: [{ url }],
-                album_type: 'album' | 'single' | 'appears_on',
-                release_date: string,
-                total_tracks: number,
-                uri: string
-            }
+        releases: List of release objects
         playlist_id: Optional Spotify playlist ID for this week
+        finalized: True if cron has processed this week (locks it)
         
     Returns:
         The saved item
     """
     try:
-        log.info(f"Saving release radar week for {email} - {week_key}")
+        log.info(f"Saving release radar week for {email} - {week_key} (finalized={finalized})")
         
         table = dynamodb.Table(RELEASE_RADAR_HISTORY_TABLE_NAME)
         
         # Calculate stats
         stats = {
             'totalTracks': len(releases),
-            'albumCount': len([r for r in releases if r.get('album_type') == 'album']),
-            'singleCount': len([r for r in releases if r.get('album_type') == 'single']),
-            'appearsOnCount': len([r for r in releases if r.get('album_type') == 'appears_on'])
+            'albumCount': len([r for r in releases if r.get('albumType') == 'album' or r.get('album_type') == 'album']),
+            'singleCount': len([r for r in releases if r.get('albumType') == 'single' or r.get('album_type') == 'single']),
+            'appearsOnCount': len([r for r in releases if r.get('albumType') == 'appears_on' or r.get('album_type') == 'appears_on'])
         }
         
-        # Simplify releases for storage (don't store everything)
+        # Normalize releases for storage
         stored_releases = []
         for r in releases:
-            stored_releases.append({
-                'id': r.get('id'),
-                'name': r.get('name'),
-                'artistName': r.get('artists', [{}])[0].get('name', 'Unknown'),
-                'artistId': r.get('artists', [{}])[0].get('id'),
-                'imageUrl': r.get('images', [{}])[0].get('url') if r.get('images') else None,
-                'albumType': r.get('album_type'),
-                'releaseDate': r.get('release_date'),
-                'totalTracks': r.get('total_tracks', 1),
-                'uri': r.get('uri')
-            })
+            # Handle both formats (from Spotify API vs already normalized)
+            if 'artistName' in r:
+                # Already normalized
+                stored_releases.append(r)
+            else:
+                # From Spotify API - normalize it
+                stored_releases.append({
+                    'id': r.get('id'),
+                    'name': r.get('name'),
+                    'artistName': r.get('artists', [{}])[0].get('name', 'Unknown'),
+                    'artistId': r.get('artists', [{}])[0].get('id'),
+                    'imageUrl': r.get('images', [{}])[0].get('url') if r.get('images') else None,
+                    'albumType': r.get('album_type'),
+                    'releaseDate': r.get('release_date'),
+                    'totalTracks': r.get('total_tracks', 1),
+                    'uri': r.get('uri')
+                })
         
         item = {
             'email': email,
@@ -154,6 +235,8 @@ def save_release_radar_week(
             'releases': stored_releases,
             'stats': stats,
             'playlistId': playlist_id,
+            'finalized': finalized,
+            'lastUpdated': _get_today_date(),
             'createdAt': _get_timestamp()
         }
         
@@ -184,7 +267,12 @@ def save_release_radar_week(
 # Get Release Radar History
 # ============================================
 
-def get_user_release_radar_history(email: str, limit: int = None, ascending: bool = False) -> list:
+def get_user_release_radar_history(
+    email: str, 
+    limit: int = None, 
+    ascending: bool = False,
+    finalized_only: bool = False
+) -> list:
     """
     Get all release radar history for a user.
     
@@ -192,12 +280,13 @@ def get_user_release_radar_history(email: str, limit: int = None, ascending: boo
         email: User's email
         limit: Optional limit on results
         ascending: If True, oldest first (default: newest first)
+        finalized_only: If True, only return finalized weeks
         
     Returns:
         List of week records
     """
     try:
-        log.info(f"Getting release radar history for {email}")
+        log.info(f"Getting release radar history for {email} (finalized_only={finalized_only})")
         
         table = dynamodb.Table(RELEASE_RADAR_HISTORY_TABLE_NAME)
         
@@ -220,6 +309,10 @@ def get_user_release_radar_history(email: str, limit: int = None, ascending: boo
         
         if limit:
             weeks = weeks[:limit]
+        
+        # Filter to finalized only if requested
+        if finalized_only:
+            weeks = [w for w in weeks if w.get('finalized', False)]
         
         log.info(f"Found {len(weeks)} release radar weeks for {email}")
         return weeks
@@ -268,7 +361,12 @@ def get_release_radar_week(email: str, week_key: str) -> dict | None:
         )
 
 
-def get_release_radar_in_range(email: str, start_week: str, end_week: str) -> list:
+def get_release_radar_in_range(
+    email: str, 
+    start_week: str, 
+    end_week: str,
+    finalized_only: bool = False
+) -> list:
     """
     Get release radar data within a week range.
     
@@ -276,6 +374,7 @@ def get_release_radar_in_range(email: str, start_week: str, end_week: str) -> li
         email: User's email
         start_week: Start week key (inclusive)
         end_week: End week key (inclusive)
+        finalized_only: If True, only return finalized weeks
         
     Returns:
         List of week records in the range
@@ -301,6 +400,10 @@ def get_release_radar_in_range(email: str, start_week: str, end_week: str) -> li
             )
             weeks.extend(response.get('Items', []))
         
+        # Filter to finalized only if requested
+        if finalized_only:
+            weeks = [w for w in weeks if w.get('finalized', False)]
+        
         log.info(f"Found {len(weeks)} release radar weeks in range for {email}")
         return weeks
         
@@ -313,12 +416,13 @@ def get_release_radar_in_range(email: str, start_week: str, end_week: str) -> li
         )
 
 
-def check_user_has_history(email: str) -> bool:
+def check_user_has_history(email: str, finalized_only: bool = True) -> bool:
     """
     Check if a user has any release radar history.
     
     Args:
         email: User's email
+        finalized_only: If True, only check for finalized weeks
         
     Returns:
         True if user has at least one week of history
@@ -328,14 +432,52 @@ def check_user_has_history(email: str) -> bool:
         
         response = table.query(
             KeyConditionExpression=Key('email').eq(email),
-            Limit=1
+            Limit=5 if finalized_only else 1
         )
         
-        return len(response.get('Items', [])) > 0
+        items = response.get('Items', [])
+        
+        if finalized_only:
+            return any(item.get('finalized', False) for item in items)
+        
+        return len(items) > 0
         
     except Exception as err:
         log.error(f"Check user has history failed: {err}")
         return False
+
+
+def check_week_needs_refresh(email: str, week_key: str) -> bool:
+    """
+    Check if a week needs to be refreshed (not updated today).
+    
+    Args:
+        email: User's email
+        week_key: Week key to check
+        
+    Returns:
+        True if week doesn't exist, is not finalized, and wasn't updated today
+    """
+    try:
+        week_data = get_release_radar_week(email, week_key)
+        
+        if not week_data:
+            # No data exists, needs refresh
+            return True
+        
+        if week_data.get('finalized', False):
+            # Finalized weeks never need refresh
+            return False
+        
+        # Check if already updated today
+        last_updated = week_data.get('lastUpdated', '')
+        today = _get_today_date()
+        
+        return last_updated != today
+        
+    except Exception as err:
+        log.error(f"Check week needs refresh failed: {err}")
+        return True  # Default to needing refresh on error
 
 
 def delete_user_release_radar_history(email: str) -> int:

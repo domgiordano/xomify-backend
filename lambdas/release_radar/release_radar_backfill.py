@@ -3,6 +3,10 @@ XOMIFY Release Radar History Backfill
 =====================================
 Backfills 6 months of release radar history for new users.
 
+Week Definition: Sunday 00:00:00 to Saturday 23:59:59
+- Only saves COMPLETED weeks (not current incomplete week)
+- All backfilled weeks are marked as finalized=True
+
 Triggered when:
 1. User enrolls in release radar (via API)
 2. User visits release radar page with no history (via API)
@@ -29,6 +33,9 @@ async def backfill_release_radar_history(user: dict) -> dict:
     """
     Backfill 6 months of release radar history for a user.
     
+    Only backfills COMPLETED weeks (not current incomplete week).
+    All backfilled weeks are marked as finalized=True.
+    
     Args:
         user: User dict with email, refreshToken, etc.
         
@@ -39,9 +46,9 @@ async def backfill_release_radar_history(user: dict) -> dict:
     
     log.info(f"[{email}] Starting 6-month history backfill...")
     
-    # Check if user already has history
-    if check_user_has_history(email):
-        log.info(f"[{email}] User already has history, skipping backfill")
+    # Check if user already has finalized history
+    if check_user_has_history(email, finalized_only=True):
+        log.info(f"[{email}] User already has finalized history, skipping backfill")
         return {"email": email, "status": "skipped", "reason": "history_exists"}
     
     connector = aiohttp.TCPConnector(limit=10)
@@ -71,19 +78,28 @@ async def backfill_release_radar_history(user: dict) -> dict:
             )
             log.info(f"[{email}] Found {len(all_releases)} total releases")
             
-            # Group releases by week
+            # Group releases by Sunday-Saturday week
             releases_by_week = group_releases_by_week(all_releases)
             log.info(f"[{email}] Grouped into {len(releases_by_week)} weeks")
             
-            # Save each week to DynamoDB
+            # Get current week key to exclude it (it's incomplete)
+            current_week_key = get_week_key()
+            
+            # Save each COMPLETED week to DynamoDB
             weeks_saved = 0
             for week_key, releases in releases_by_week.items():
+                # Skip current incomplete week
+                if week_key == current_week_key:
+                    log.info(f"[{email}] Skipping current incomplete week {week_key}")
+                    continue
+                
                 try:
                     save_release_radar_week(
                         email=email,
                         week_key=week_key,
                         releases=releases,
-                        playlist_id=None  # No playlist for historical weeks
+                        playlist_id=None,  # No playlist for historical weeks
+                        finalized=True  # Backfilled weeks are finalized
                     )
                     weeks_saved += 1
                 except Exception as err:
@@ -169,20 +185,18 @@ async def fetch_all_releases_for_backfill(
                         
                         seen_ids.add(album_id)
                         
+                        # Normalize for storage
                         all_releases.append({
                             'id': album_id,
                             'name': album.get('name'),
-                            'artists': [
-                                {'id': a.get('id'), 'name': a.get('name')}
-                                for a in album.get('artists', [])
-                            ],
-                            'images': album.get('images', []),
-                            'album_type': album.get('album_type'),
-                            'release_date': release_date_str,
+                            'artistName': album.get('artists', [{}])[0].get('name', 'Unknown'),
+                            'artistId': album.get('artists', [{}])[0].get('id'),
+                            'imageUrl': album.get('images', [{}])[0].get('url') if album.get('images') else None,
+                            'albumType': album.get('album_type'),
+                            'releaseDate': release_date_str,
                             'release_date_parsed': release_date,
-                            'total_tracks': album.get('total_tracks', 1),
-                            'uri': album.get('uri'),
-                            'external_urls': album.get('external_urls', {})
+                            'totalTracks': album.get('total_tracks', 1),
+                            'uri': album.get('uri')
                         })
                         
                 except Exception as err:
@@ -198,7 +212,7 @@ async def fetch_all_releases_for_backfill(
 
 def group_releases_by_week(releases: list) -> dict:
     """
-    Group releases by their week key (Saturday-Friday weeks).
+    Group releases by their week key (Sunday-Saturday weeks).
     
     Args:
         releases: List of release objects with release_date_parsed
@@ -213,7 +227,7 @@ def group_releases_by_week(releases: list) -> dict:
         if not release_date:
             continue
         
-        # Get week key for this release
+        # Get week key for this release (Sunday-Saturday)
         week_key = get_week_key(release_date)
         
         if week_key not in weeks:
