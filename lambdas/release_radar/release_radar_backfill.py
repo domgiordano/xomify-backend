@@ -6,14 +6,10 @@ Backfills 4 weeks (1 month) of release radar history for new users.
 Week Definition: Sunday 00:00:00 to Saturday 23:59:59
 - Only saves COMPLETED weeks (not current incomplete week)
 - All backfilled weeks are marked as finalized=True
-
-Triggered via async Lambda invocation to avoid API Gateway timeout.
 """
 
 import asyncio
 import aiohttp
-import json
-import boto3
 from datetime import datetime, timedelta
 
 from lambdas.common.logger import get_logger
@@ -22,7 +18,8 @@ from lambdas.common.spotify import Spotify
 from lambdas.common.aiohttp_helper import fetch_json
 from lambdas.common.release_radar_dynamo import (
     get_week_key,
-    save_release_radar_week
+    save_release_radar_week,
+    get_user_release_radar_history
 )
 
 log = get_logger(__file__)
@@ -52,7 +49,6 @@ async def backfill_release_radar_history(user: dict) -> dict:
     
     # Check how many weeks of history exist - only skip if MORE than 1 week
     # (1 week = just current week from /live, doesn't count as "history")
-    from lambdas.common.release_radar_dynamo import get_user_release_radar_history
     existing_weeks = get_user_release_radar_history(email, limit=5, finalized_only=False)
     
     if len(existing_weeks) > 1:
@@ -253,46 +249,7 @@ def group_releases_by_week(releases: list) -> dict:
     return weeks
 
 
-def invoke_backfill_async(user: dict) -> dict:
-    """
-    Invoke the backfill Lambda asynchronously.
-    
-    This allows the API to return immediately while backfill runs in background.
-    
-    Args:
-        user: User dict with email, refreshToken, etc.
-        
-    Returns:
-        Dict indicating backfill was triggered
-    """
-    try:
-        lambda_client = boto3.client('lambda', region_name='us-east-1')
-        
-        # Get the function name from environment or use default
-        import os
-        function_name = os.environ.get('BACKFILL_FUNCTION_NAME', 'xomify-release-radar-backfill')
-        
-        # Invoke asynchronously (InvocationType='Event')
-        lambda_client.invoke(
-            FunctionName=function_name,
-            InvocationType='Event',  # Async - returns immediately
-            Payload=json.dumps({'user': user})
-        )
-        
-        log.info(f"[{user.get('email')}] Triggered async backfill")
-        
-        return {
-            "email": user.get('email'),
-            "status": "triggered",
-            "message": "Backfill started in background. Data will appear in a few minutes."
-        }
-        
-    except Exception as err:
-        log.error(f"Failed to invoke backfill async: {err}")
-        raise
-
-
-# Lambda handler
+# Lambda handler (for direct invocation/testing)
 def handler(event, context):
     """AWS Lambda entry point."""
     try:

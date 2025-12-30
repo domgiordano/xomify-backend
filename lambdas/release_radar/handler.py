@@ -393,13 +393,13 @@ def trigger_backfill(body: dict) -> dict:
     """
     POST /release-radar/backfill
     
-    Trigger history backfill for a user (runs async in background).
+    Trigger history backfill for a user.
     Only skips if user has MORE than 1 week of history (not just current week).
     
     Body:
     - user: User object with email, refreshToken, etc.
     """
-    from release_radar_backfill import invoke_backfill_async
+    from release_radar_backfill import backfill_release_radar_history
     
     user = body.get('user')
     if not user:
@@ -422,13 +422,13 @@ def trigger_backfill(body: dict) -> dict:
                 'weeksFound': len(existing_weeks)
             })
         
-        # Invoke backfill Lambda asynchronously (returns immediately)
-        result = invoke_backfill_async(user)
+        # Run backfill directly
+        result = asyncio.run(backfill_release_radar_history(user))
         
         return response(200, result)
         
     except Exception as err:
-        log.error(f"Backfill trigger error: {err}")
+        log.error(f"Backfill error: {err}")
         return response(500, {'error': str(err)})
 
 
