@@ -398,7 +398,7 @@ def trigger_backfill(body: dict) -> dict:
     Body:
     - user: User object with email, refreshToken, etc.
     """
-    from lambdas.release_radar.release_radar_backfill import invoke_backfill_async
+    from release_radar_backfill import invoke_backfill_async
     
     user = body.get('user')
     if not user:
