@@ -29,7 +29,7 @@ from lambdas.common.release_radar_dynamo import (
 from lambdas.common.dynamo_helpers import get_user_table_data
 from lambdas.common.spotify import Spotify
 from lambdas.common.aiohttp_helper import fetch_json
-from lambdas.release_radar.release_radar_backfill import backfill_release_radar_history
+from release_radar_backfill import backfill_release_radar_history
 
 log = get_logger(__file__)
 
