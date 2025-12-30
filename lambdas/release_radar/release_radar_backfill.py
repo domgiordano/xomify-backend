@@ -1,19 +1,19 @@
 """
 XOMIFY Release Radar History Backfill
 =====================================
-Backfills 6 months of release radar history for new users.
+Backfills 4 weeks (1 month) of release radar history for new users.
 
 Week Definition: Sunday 00:00:00 to Saturday 23:59:59
 - Only saves COMPLETED weeks (not current incomplete week)
 - All backfilled weeks are marked as finalized=True
 
-Triggered when:
-1. User enrolls in release radar (via API)
-2. User visits release radar page with no history (via API)
+Triggered via async Lambda invocation to avoid API Gateway timeout.
 """
 
 import asyncio
 import aiohttp
+import json
+import boto3
 from datetime import datetime, timedelta
 
 from lambdas.common.logger import get_logger
@@ -28,10 +28,15 @@ from lambdas.common.release_radar_dynamo import (
 
 log = get_logger(__file__)
 
+# Backfill config
+BACKFILL_WEEKS = 4  # 1 month of history
+BATCH_SIZE = 10  # Artists per batch (smaller = less rate limiting)
+BATCH_DELAY_SECONDS = 1.0  # Delay between batches to avoid rate limits
+
 
 async def backfill_release_radar_history(user: dict) -> dict:
     """
-    Backfill 6 months of release radar history for a user.
+    Backfill 4 weeks (1 month) of release radar history for a user.
     
     Only backfills COMPLETED weeks (not current incomplete week).
     All backfilled weeks are marked as finalized=True.
@@ -44,15 +49,15 @@ async def backfill_release_radar_history(user: dict) -> dict:
     """
     email = user.get('email', 'unknown')
     
-    log.info(f"[{email}] Starting 6-month history backfill...")
+    log.info(f"[{email}] Starting {BACKFILL_WEEKS}-week history backfill...")
     
     # Check if user already has finalized history
     if check_user_has_history(email, finalized_only=True):
         log.info(f"[{email}] User already has finalized history, skipping backfill")
         return {"email": email, "status": "skipped", "reason": "history_exists"}
     
-    connector = aiohttp.TCPConnector(limit=10)
-    timeout = aiohttp.ClientTimeout(total=300)  # 5 min timeout
+    connector = aiohttp.TCPConnector(limit=5)  # Lower concurrency
+    timeout = aiohttp.ClientTimeout(total=540)  # 9 min timeout (Lambda max is 15)
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
         try:
@@ -69,12 +74,12 @@ async def backfill_release_radar_history(user: dict) -> dict:
             if not artist_ids:
                 return {"email": email, "status": "skipped", "reason": "no_followed_artists"}
             
-            # Fetch all releases from last 6 months
-            log.info(f"[{email}] Fetching releases from last 6 months...")
+            # Fetch all releases from last 4 weeks
+            log.info(f"[{email}] Fetching releases from last {BACKFILL_WEEKS} weeks...")
             all_releases = await fetch_all_releases_for_backfill(
                 spotify, 
                 artist_ids, 
-                months=6
+                weeks=BACKFILL_WEEKS
             )
             log.info(f"[{email}] Found {len(all_releases)} total releases")
             
@@ -125,7 +130,7 @@ async def backfill_release_radar_history(user: dict) -> dict:
 async def fetch_all_releases_for_backfill(
     spotify, 
     artist_ids: list, 
-    months: int = 6
+    weeks: int = 4
 ) -> list:
     """
     Fetch all releases from followed artists within the time window.
@@ -133,7 +138,7 @@ async def fetch_all_releases_for_backfill(
     Args:
         spotify: Spotify client instance
         artist_ids: List of artist IDs
-        months: Number of months to look back
+        weeks: Number of weeks to look back
         
     Returns:
         List of release objects with full details
@@ -141,14 +146,18 @@ async def fetch_all_releases_for_backfill(
     all_releases = []
     seen_ids = set()
     
-    cutoff_date = datetime.now() - timedelta(days=months * 30)
+    cutoff_date = datetime.now() - timedelta(weeks=weeks)
+    email = spotify.user.get('email', 'unknown')
     
-    # Process artists in batches
-    batch_size = 20
     release_types = ['album', 'single', 'appears_on']
+    total_artists = len(artist_ids)
     
-    for i in range(0, len(artist_ids), batch_size):
-        batch = artist_ids[i:i+batch_size]
+    for i in range(0, total_artists, BATCH_SIZE):
+        batch = artist_ids[i:i+BATCH_SIZE]
+        batch_num = i // BATCH_SIZE + 1
+        total_batches = (total_artists + BATCH_SIZE - 1) // BATCH_SIZE
+        
+        log.info(f"[{email}] Processing batch {batch_num}/{total_batches} ({len(batch)} artists)")
         
         for artist_id in batch:
             for release_type in release_types:
@@ -203,9 +212,10 @@ async def fetch_all_releases_for_backfill(
                     log.debug(f"Failed to fetch {release_type} for artist {artist_id}: {err}")
                     continue
         
-        # Small delay between batches
-        if i + batch_size < len(artist_ids):
-            await asyncio.sleep(0.3)
+        # Delay between batches to avoid rate limits
+        if i + BATCH_SIZE < total_artists:
+            log.debug(f"[{email}] Waiting {BATCH_DELAY_SECONDS}s before next batch...")
+            await asyncio.sleep(BATCH_DELAY_SECONDS)
     
     return all_releases
 
@@ -238,6 +248,45 @@ def group_releases_by_week(releases: list) -> dict:
         weeks[week_key].append(release_copy)
     
     return weeks
+
+
+def invoke_backfill_async(user: dict) -> dict:
+    """
+    Invoke the backfill Lambda asynchronously.
+    
+    This allows the API to return immediately while backfill runs in background.
+    
+    Args:
+        user: User dict with email, refreshToken, etc.
+        
+    Returns:
+        Dict indicating backfill was triggered
+    """
+    try:
+        lambda_client = boto3.client('lambda', region_name='us-east-1')
+        
+        # Get the function name from environment or use default
+        import os
+        function_name = os.environ.get('BACKFILL_FUNCTION_NAME', 'xomify-release-radar-backfill')
+        
+        # Invoke asynchronously (InvocationType='Event')
+        lambda_client.invoke(
+            FunctionName=function_name,
+            InvocationType='Event',  # Async - returns immediately
+            Payload=json.dumps({'user': user})
+        )
+        
+        log.info(f"[{user.get('email')}] Triggered async backfill")
+        
+        return {
+            "email": user.get('email'),
+            "status": "triggered",
+            "message": "Backfill started in background. Data will appear in a few minutes."
+        }
+        
+    except Exception as err:
+        log.error(f"Failed to invoke backfill async: {err}")
+        raise
 
 
 # Lambda handler

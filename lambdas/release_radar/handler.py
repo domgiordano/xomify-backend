@@ -29,7 +29,6 @@ from lambdas.common.release_radar_dynamo import (
 from lambdas.common.dynamo_helpers import get_user_table_data
 from lambdas.common.spotify import Spotify
 from lambdas.common.aiohttp_helper import fetch_json
-from release_radar_backfill import backfill_release_radar_history
 
 log = get_logger(__file__)
 
@@ -285,7 +284,7 @@ def get_history(params: dict) -> dict:
     - limit: Max results (optional, default 26 = ~6 months)
     - startWeek: Start of range (optional)
     - endWeek: End of range (optional)
-    - includeNonFinalized: If 'true', include non-finalized weeks (default: false)
+    - finalizedOnly: If 'true', only return finalized weeks (default: false)
     """
     email = params.get('email')
     if not email:
@@ -295,8 +294,8 @@ def get_history(params: dict) -> dict:
         # Check for range query
         start_week = params.get('startWeek')
         end_week = params.get('endWeek')
-        include_non_finalized = params.get('includeNonFinalized', '').lower() == 'true'
-        finalized_only = not include_non_finalized
+        # Default to including ALL weeks (finalized and non-finalized)
+        finalized_only = params.get('finalizedOnly', '').lower() == 'true'
         
         if start_week and end_week:
             weeks = get_release_radar_in_range(email, start_week, end_week, finalized_only=finalized_only)
@@ -358,7 +357,7 @@ def check_history(email: str) -> dict:
     """
     GET /release-radar/check
     
-    Check if user has any finalized history (for triggering backfill).
+    Check if user has any history (finalized OR non-finalized).
     
     Query params:
     - email: User's email (required)
@@ -367,7 +366,8 @@ def check_history(email: str) -> dict:
         return response(400, {'error': 'Missing email parameter'})
     
     try:
-        has_history = check_user_has_history(email, finalized_only=True)
+        # Check for ANY history (not just finalized)
+        has_history = check_user_has_history(email, finalized_only=False)
         current_week = get_week_key()
         
         # Also check if current week needs refresh
@@ -393,11 +393,13 @@ def trigger_backfill(body: dict) -> dict:
     """
     POST /release-radar/backfill
     
-    Trigger history backfill for a user.
+    Trigger history backfill for a user (runs async in background).
     
     Body:
     - user: User object with email, refreshToken, etc.
     """
+    from lambdas.release_radar.release_radar_backfill import invoke_backfill_async
+    
     user = body.get('user')
     if not user:
         return response(400, {'error': 'Missing user data'})
@@ -407,21 +409,21 @@ def trigger_backfill(body: dict) -> dict:
         return response(400, {'error': 'Missing email in user data'})
     
     try:
-        # Check if already has finalized history
-        if check_user_has_history(email, finalized_only=True):
+        # Check if already has history (any, not just finalized)
+        if check_user_has_history(email, finalized_only=False):
             return response(200, {
                 'email': email,
                 'status': 'skipped',
                 'reason': 'history_exists'
             })
         
-        # Run backfill
-        result = asyncio.run(backfill_release_radar_history(user))
+        # Invoke backfill Lambda asynchronously (returns immediately)
+        result = invoke_backfill_async(user)
         
         return response(200, result)
         
     except Exception as err:
-        log.error(f"Backfill error: {err}")
+        log.error(f"Backfill trigger error: {err}")
         return response(500, {'error': str(err)})
 
 
