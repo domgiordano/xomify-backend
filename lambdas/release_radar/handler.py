@@ -394,6 +394,7 @@ def trigger_backfill(body: dict) -> dict:
     POST /release-radar/backfill
     
     Trigger history backfill for a user (runs async in background).
+    Only skips if user has MORE than 1 week of history (not just current week).
     
     Body:
     - user: User object with email, refreshToken, etc.
@@ -409,12 +410,16 @@ def trigger_backfill(body: dict) -> dict:
         return response(400, {'error': 'Missing email in user data'})
     
     try:
-        # Check if already has history (any, not just finalized)
-        if check_user_has_history(email, finalized_only=False):
+        # Check how many weeks of history exist
+        existing_weeks = get_user_release_radar_history(email, limit=5, finalized_only=False)
+        
+        # Only skip if there's actual historical data (more than just current week)
+        if len(existing_weeks) > 1:
             return response(200, {
                 'email': email,
                 'status': 'skipped',
-                'reason': 'history_exists'
+                'reason': 'history_exists',
+                'weeksFound': len(existing_weeks)
             })
         
         # Invoke backfill Lambda asynchronously (returns immediately)

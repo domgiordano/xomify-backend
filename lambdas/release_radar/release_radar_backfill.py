@@ -22,8 +22,7 @@ from lambdas.common.spotify import Spotify
 from lambdas.common.aiohttp_helper import fetch_json
 from lambdas.common.release_radar_dynamo import (
     get_week_key,
-    save_release_radar_week,
-    check_user_has_history
+    save_release_radar_week
 )
 
 log = get_logger(__file__)
@@ -51,10 +50,14 @@ async def backfill_release_radar_history(user: dict) -> dict:
     
     log.info(f"[{email}] Starting {BACKFILL_WEEKS}-week history backfill...")
     
-    # Check if user already has finalized history
-    if check_user_has_history(email, finalized_only=True):
-        log.info(f"[{email}] User already has finalized history, skipping backfill")
-        return {"email": email, "status": "skipped", "reason": "history_exists"}
+    # Check how many weeks of history exist - only skip if MORE than 1 week
+    # (1 week = just current week from /live, doesn't count as "history")
+    from lambdas.common.release_radar_dynamo import get_user_release_radar_history
+    existing_weeks = get_user_release_radar_history(email, limit=5, finalized_only=False)
+    
+    if len(existing_weeks) > 1:
+        log.info(f"[{email}] User already has {len(existing_weeks)} weeks of history, skipping backfill")
+        return {"email": email, "status": "skipped", "reason": "history_exists", "weeksFound": len(existing_weeks)}
     
     connector = aiohttp.TCPConnector(limit=5)  # Lower concurrency
     timeout = aiohttp.ClientTimeout(total=540)  # 9 min timeout (Lambda max is 15)
