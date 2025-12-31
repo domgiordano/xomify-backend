@@ -14,6 +14,7 @@ Endpoints:
 import json
 import asyncio
 import aiohttp
+from datetime import datetime, timedelta
 
 from lambdas.common.logger import get_logger
 from lambdas.common.release_radar_dynamo import (
@@ -66,9 +67,6 @@ def handler(event, context):
             week_key = path_params.get('weekKey') or query_params.get('weekKey')
             return get_week(query_params.get('email'), week_key)
         
-        elif 'backfill' in path and http_method == 'POST':
-            return trigger_backfill(body)
-        
         elif 'check' in path and http_method == 'GET':
             return check_history(query_params.get('email'))
         
@@ -88,16 +86,18 @@ async def get_live_releases(params: dict) -> dict:
     """
     GET /release-radar/live
     
-    Fetch current week's releases live from Spotify.
-    Only fetches if not already updated today (daily refresh limit).
+    Smart fetch that combines current week + backfill when needed.
+    
+    Flow:
+    1. Check if user has enough history (30+ weeks)
+    2. If NO history: Fetch 6 months of data in ONE pass
+       - Return current week immediately
+       - Save all weeks to DB (current week not finalized, past weeks finalized)
+    3. If HAS history: Just check/update current week
     
     Query params:
     - email: User's email (required)
     - force: If 'true', bypass daily refresh check
-    
-    Returns:
-    - Current week data (either fresh from Spotify or cached from DB)
-    - needsRefresh: Whether data was fetched fresh
     """
     email = params.get('email')
     if not email:
@@ -107,67 +107,78 @@ async def get_live_releases(params: dict) -> dict:
     current_week_key = get_week_key()
     
     try:
-        # Check if current week exists and is finalized
-        existing_week = get_release_radar_week(email, current_week_key)
+        # Check existing history
+        existing_weeks = get_user_release_radar_history(email, limit=30, finalized_only=False)
+        existing_week_keys = {w.get('weekKey') for w in existing_weeks}
+        has_enough_history = len(existing_weeks) >= 30
         
-        if existing_week and existing_week.get('finalized'):
-            # Week is finalized by cron, return DB data
+        # Check current week status
+        current_week_data = next((w for w in existing_weeks if w.get('weekKey') == current_week_key), None)
+        
+        # If current week is finalized, just return it
+        if current_week_data and current_week_data.get('finalized'):
             log.info(f"[{email}] Current week is finalized, returning DB data")
             return response(200, {
                 'email': email,
                 'weekKey': current_week_key,
-                'week': existing_week,
+                'week': current_week_data,
                 'source': 'database',
-                'finalized': True,
-                'needsRefresh': False
+                'finalized': True
             })
         
-        # Check if we need to refresh (not updated today)
+        # Check if we need to refresh current week (not updated today)
         needs_refresh = force_refresh or check_week_needs_refresh(email, current_week_key)
         
-        if not needs_refresh and existing_week:
-            # Already updated today, return cached data
+        # If has enough history AND current week doesn't need refresh, return cached
+        if has_enough_history and not needs_refresh and current_week_data:
             log.info(f"[{email}] Already updated today, returning cached data")
             return response(200, {
                 'email': email,
                 'weekKey': current_week_key,
-                'week': existing_week,
+                'week': current_week_data,
                 'source': 'cache',
-                'finalized': False,
-                'needsRefresh': False
+                'finalized': False
             })
-        
-        # Need to fetch live from Spotify
-        log.info(f"[{email}] Fetching live releases from Spotify...")
         
         # Get user data for Spotify auth
         user = get_user_table_data(email)
         if not user:
             return response(404, {'error': 'User not found'})
         
-        # Fetch releases
-        releases = await fetch_current_week_releases(user)
+        # Decide: full backfill or just current week
+        if not has_enough_history:
+            # FULL FETCH: 6 months including current week
+            log.info(f"[{email}] User has {len(existing_weeks)} weeks, doing full 6-month fetch...")
+            current_week, weeks_saved = await fetch_and_save_all_releases(
+                user, 
+                existing_week_keys,
+                current_week_key
+            )
+        else:
+            # QUICK FETCH: Just current week
+            log.info(f"[{email}] User has enough history, fetching current week only...")
+            current_week = await fetch_current_week_only(user, current_week_key)
+            weeks_saved = 1 if current_week else 0
         
-        # Save to DB (non-finalized)
-        existing_playlist_id = existing_week.get('playlistId') if existing_week else user.get('releaseRadarId')
+        if not current_week:
+            # No releases this week, save empty week
+            current_week = save_release_radar_week(
+                email=email,
+                week_key=current_week_key,
+                releases=[],
+                playlist_id=user.get('releaseRadarId'),
+                finalized=False
+            )
         
-        saved_week = save_release_radar_week(
-            email=email,
-            week_key=current_week_key,
-            releases=releases,
-            playlist_id=existing_playlist_id,
-            finalized=False
-        )
-        
-        log.info(f"[{email}] Saved {len(releases)} releases for current week")
+        log.info(f"[{email}] Returning current week with {len(current_week.get('releases', []))} releases")
         
         return response(200, {
             'email': email,
             'weekKey': current_week_key,
-            'week': saved_week,
+            'week': current_week,
             'source': 'spotify',
             'finalized': False,
-            'needsRefresh': True
+            'weeksSaved': weeks_saved
         })
         
     except Exception as err:
@@ -175,100 +186,251 @@ async def get_live_releases(params: dict) -> dict:
         return response(500, {'error': str(err)})
 
 
-async def fetch_current_week_releases(user: dict) -> list:
+async def fetch_and_save_all_releases(
+    user: dict, 
+    existing_week_keys: set,
+    current_week_key: str
+) -> tuple:
     """
-    Fetch current week's releases from Spotify for a user.
+    Fetch 6 months of releases in ONE pass and save all weeks.
+    Returns current week data immediately.
     
     Args:
-        user: User dict with email, refreshToken, etc.
+        user: User dict
+        existing_week_keys: Set of week keys that already exist (skip these)
+        current_week_key: Current week key
         
     Returns:
-        List of release objects (normalized for storage)
+        Tuple of (current_week_data, total_weeks_saved)
     """
     email = user.get('email', 'unknown')
     
-    connector = aiohttp.TCPConnector(limit=10)
-    timeout = aiohttp.ClientTimeout(total=120)  # 2 min timeout
+    connector = aiohttp.TCPConnector(limit=5)
+    timeout = aiohttp.ClientTimeout(total=300)  # 5 min for full fetch
     
     async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        # Initialize Spotify client
+        # Initialize Spotify
         spotify = Spotify(user, session)
         await spotify.aiohttp_initialize_release_radar()
         
         # Get followed artists
         log.info(f"[{email}] Fetching followed artists...")
         await spotify.followed_artists.aiohttp_get_followed_artists()
-        artist_count = len(spotify.followed_artists.artist_id_list)
-        log.info(f"[{email}] Found {artist_count} followed artists")
+        artist_ids = spotify.followed_artists.artist_id_list
+        log.info(f"[{email}] Found {len(artist_ids)} followed artists")
         
-        # Get releases for current week (uses default dynamic calculation)
-        log.info(f"[{email}] Scanning for releases...")
-        await spotify.followed_artists.aiohttp_get_followed_artist_latest_release()
+        if not artist_ids:
+            return None, 0
         
-        # Get album details for the releases
-        releases = await get_release_details(
-            spotify,
-            spotify.followed_artists.artist_tracks.album_uri_list
+        # Fetch ALL releases from last 6 months
+        cutoff_date = datetime.now() - timedelta(weeks=26)
+        all_releases = []
+        seen_ids = set()
+        
+        batch_size = 20
+        total_artists = len(artist_ids)
+        
+        for i in range(0, total_artists, batch_size):
+            batch = artist_ids[i:i+batch_size]
+            
+            for artist_id in batch:
+                try:
+                    url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
+                    url += "?include_groups=album,single,appears_on&limit=50"
+                    
+                    data = await fetch_json(session, url, headers=spotify.headers)
+                    
+                    for album in data.get('items', []):
+                        album_id = album.get('id')
+                        if album_id in seen_ids:
+                            continue
+                        
+                        release_date_str = album.get('release_date', '')
+                        release_date = parse_release_date(release_date_str)
+                        if not release_date or release_date < cutoff_date:
+                            continue
+                        
+                        seen_ids.add(album_id)
+                        all_releases.append({
+                            'id': album_id,
+                            'name': album.get('name'),
+                            'artistName': album.get('artists', [{}])[0].get('name', 'Unknown'),
+                            'artistId': album.get('artists', [{}])[0].get('id'),
+                            'imageUrl': album.get('images', [{}])[0].get('url') if album.get('images') else None,
+                            'albumType': album.get('album_type'),
+                            'releaseDate': release_date_str,
+                            'totalTracks': album.get('total_tracks', 1),
+                            'uri': album.get('uri'),
+                            '_parsed_date': release_date
+                        })
+                except Exception as err:
+                    log.debug(f"Failed to fetch releases for artist {artist_id}: {err}")
+                    continue
+            
+            # Delay between batches
+            if i + batch_size < total_artists:
+                await asyncio.sleep(0.5)
+        
+        log.info(f"[{email}] Found {len(all_releases)} total releases in last 6 months")
+        
+        # Group by week
+        releases_by_week = {}
+        for release in all_releases:
+            week_key = get_week_key(release['_parsed_date'])
+            if week_key not in releases_by_week:
+                releases_by_week[week_key] = []
+            # Remove internal field before storing
+            release_copy = {k: v for k, v in release.items() if not k.startswith('_')}
+            releases_by_week[week_key].append(release_copy)
+        
+        log.info(f"[{email}] Grouped into {len(releases_by_week)} weeks")
+        
+        # Save all weeks
+        current_week_data = None
+        weeks_saved = 0
+        playlist_id = user.get('releaseRadarId')
+        
+        for week_key, releases in releases_by_week.items():
+            # Skip if already exists
+            if week_key in existing_week_keys:
+                log.debug(f"[{email}] Skipping existing week {week_key}")
+                continue
+            
+            # Current week = not finalized, past weeks = finalized
+            is_current = (week_key == current_week_key)
+            
+            try:
+                saved = save_release_radar_week(
+                    email=email,
+                    week_key=week_key,
+                    releases=releases,
+                    playlist_id=playlist_id if is_current else None,
+                    finalized=not is_current
+                )
+                weeks_saved += 1
+                
+                if is_current:
+                    current_week_data = saved
+                    log.info(f"[{email}] Saved current week {week_key} with {len(releases)} releases")
+                else:
+                    log.debug(f"[{email}] Saved historical week {week_key} with {len(releases)} releases")
+                    
+            except Exception as err:
+                log.warning(f"[{email}] Failed to save week {week_key}: {err}")
+        
+        # If no releases this week, still create the current week entry
+        if current_week_data is None:
+            current_week_data = save_release_radar_week(
+                email=email,
+                week_key=current_week_key,
+                releases=[],
+                playlist_id=playlist_id,
+                finalized=False
+            )
+            weeks_saved += 1
+        
+        log.info(f"[{email}] Saved {weeks_saved} weeks total")
+        return current_week_data, weeks_saved
+
+
+async def fetch_current_week_only(user: dict, current_week_key: str) -> dict:
+    """
+    Fetch just the current week's releases (for users with existing history).
+    """
+    email = user.get('email', 'unknown')
+    
+    connector = aiohttp.TCPConnector(limit=5)
+    timeout = aiohttp.ClientTimeout(total=120)
+    
+    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+        spotify = Spotify(user, session)
+        await spotify.aiohttp_initialize_release_radar()
+        
+        # Get followed artists
+        await spotify.followed_artists.aiohttp_get_followed_artists()
+        artist_ids = spotify.followed_artists.artist_id_list
+        
+        if not artist_ids:
+            return None
+        
+        # Get current week date range
+        week_start, week_end = get_current_week_date_range()
+        
+        releases = []
+        seen_ids = set()
+        batch_size = 20
+        
+        for i in range(0, len(artist_ids), batch_size):
+            batch = artist_ids[i:i+batch_size]
+            
+            for artist_id in batch:
+                try:
+                    url = f"https://api.spotify.com/v1/artists/{artist_id}/albums"
+                    url += "?include_groups=album,single,appears_on&limit=10"
+                    
+                    data = await fetch_json(session, url, headers=spotify.headers)
+                    
+                    for album in data.get('items', []):
+                        album_id = album.get('id')
+                        if album_id in seen_ids:
+                            continue
+                        
+                        release_date_str = album.get('release_date', '')
+                        release_date = parse_release_date(release_date_str)
+                        
+                        if not release_date:
+                            continue
+                        
+                        # Check if in current week
+                        if not (week_start.date() <= release_date.date() <= week_end.date()):
+                            continue
+                        
+                        seen_ids.add(album_id)
+                        releases.append({
+                            'id': album_id,
+                            'name': album.get('name'),
+                            'artistName': album.get('artists', [{}])[0].get('name', 'Unknown'),
+                            'artistId': album.get('artists', [{}])[0].get('id'),
+                            'imageUrl': album.get('images', [{}])[0].get('url') if album.get('images') else None,
+                            'albumType': album.get('album_type'),
+                            'releaseDate': release_date_str,
+                            'totalTracks': album.get('total_tracks', 1),
+                            'uri': album.get('uri')
+                        })
+                except Exception as err:
+                    log.debug(f"Failed to fetch releases for artist {artist_id}: {err}")
+                    continue
+            
+            if i + batch_size < len(artist_ids):
+                await asyncio.sleep(0.3)
+        
+        # Save current week
+        playlist_id = user.get('releaseRadarId')
+        saved = save_release_radar_week(
+            email=email,
+            week_key=current_week_key,
+            releases=releases,
+            playlist_id=playlist_id,
+            finalized=False
         )
         
-        log.info(f"[{email}] Found {len(releases)} releases this week")
-        return releases
+        log.info(f"[{email}] Saved current week with {len(releases)} releases")
+        return saved
 
 
-async def get_release_details(spotify, album_uris: list) -> list:
-    """
-    Get detailed release information from album URIs.
-    
-    Args:
-        spotify: Spotify client instance
-        album_uris: List of album URIs
-        
-    Returns:
-        List of normalized release objects
-    """
-    releases = []
-    
-    if not album_uris:
-        return releases
-    
-    # Extract album IDs
-    album_ids = [uri.split(':')[2] for uri in album_uris if uri]
-    
-    # Fetch album details in batches of 20
-    for i in range(0, len(album_ids), 20):
-        batch_ids = album_ids[i:i+20]
-        ids_param = ','.join(batch_ids)
-        url = f"https://api.spotify.com/v1/albums?ids={ids_param}"
-        
-        try:
-            data = await fetch_json(
-                spotify.aiohttp_session,
-                url,
-                headers=spotify.headers
-            )
-            
-            for album in data.get('albums', []):
-                if not album:
-                    continue
-                
-                # Normalize for storage
-                releases.append({
-                    'id': album.get('id'),
-                    'name': album.get('name'),
-                    'artistName': album.get('artists', [{}])[0].get('name', 'Unknown'),
-                    'artistId': album.get('artists', [{}])[0].get('id'),
-                    'imageUrl': album.get('images', [{}])[0].get('url') if album.get('images') else None,
-                    'albumType': album.get('album_type'),
-                    'releaseDate': album.get('release_date'),
-                    'totalTracks': album.get('total_tracks', 1),
-                    'uri': album.get('uri')
-                })
-                
-        except Exception as err:
-            log.warning(f"Failed to fetch album batch: {err}")
-            continue
-    
-    return releases
+def parse_release_date(date_str: str) -> datetime:
+    """Parse release date string to datetime."""
+    if not date_str or len(date_str) < 4:
+        return None
+    try:
+        if len(date_str) == 4:
+            return datetime(int(date_str), 1, 1)
+        elif len(date_str) == 7:
+            return datetime.strptime(date_str, '%Y-%m')
+        else:
+            return datetime.strptime(date_str[:10], '%Y-%m-%d')
+    except:
+        return None
 
 
 # ============================================
@@ -382,63 +544,6 @@ def check_history(email: str) -> dict:
         
     except Exception as err:
         log.error(f"Check history error: {err}")
-        return response(500, {'error': str(err)})
-
-
-# ============================================
-# POST /release-radar/backfill
-# ============================================
-
-def trigger_backfill(body: dict) -> dict:
-    """
-    POST /release-radar/backfill
-    
-    Trigger 6-month history backfill for a user.
-    Returns immediately - backfill runs in background thread.
-    
-    Body:
-    - user: User object with email, refreshToken, etc.
-    """
-    import threading
-    from release_radar_backfill import run_backfill_sync
-    
-    user = body.get('user')
-    if not user:
-        return response(400, {'error': 'Missing user data'})
-    
-    email = user.get('email')
-    if not email:
-        return response(400, {'error': 'Missing email in user data'})
-    
-    try:
-        # Check how many weeks of history exist
-        existing_weeks = get_user_release_radar_history(email, limit=30, finalized_only=False)
-        
-        # Only backfill if less than 30 weeks of history
-        if len(existing_weeks) >= 30:
-            return response(200, {
-                'email': email,
-                'status': 'skipped',
-                'reason': 'sufficient_history',
-                'weeksFound': len(existing_weeks)
-            })
-        
-        # Start backfill in background thread (returns immediately)
-        thread = threading.Thread(target=run_backfill_sync, args=(user,))
-        thread.daemon = True  # Don't block Lambda shutdown
-        thread.start()
-        
-        log.info(f"[{email}] Backfill started in background thread")
-        
-        return response(200, {
-            'email': email,
-            'status': 'started',
-            'message': 'Backfill running in background. Refresh page to see new data.',
-            'existingWeeks': len(existing_weeks)
-        })
-        
-    except Exception as err:
-        log.error(f"Backfill trigger error: {err}")
         return response(500, {'error': str(err)})
 
 
