@@ -393,13 +393,14 @@ def trigger_backfill(body: dict) -> dict:
     """
     POST /release-radar/backfill
     
-    Trigger history backfill for a user.
-    Only skips if user has MORE than 1 week of history (not just current week).
+    Trigger 6-month history backfill for a user.
+    Returns immediately - backfill runs in background thread.
     
     Body:
     - user: User object with email, refreshToken, etc.
     """
-    from release_radar_backfill import backfill_release_radar_history
+    import threading
+    from release_radar_backfill import run_backfill_sync
     
     user = body.get('user')
     if not user:
@@ -411,24 +412,33 @@ def trigger_backfill(body: dict) -> dict:
     
     try:
         # Check how many weeks of history exist
-        existing_weeks = get_user_release_radar_history(email, limit=5, finalized_only=False)
+        existing_weeks = get_user_release_radar_history(email, limit=30, finalized_only=False)
         
-        # Only skip if there's actual historical data (more than just current week)
-        if len(existing_weeks) > 1:
+        # Only backfill if less than 30 weeks of history
+        if len(existing_weeks) >= 30:
             return response(200, {
                 'email': email,
                 'status': 'skipped',
-                'reason': 'history_exists',
+                'reason': 'sufficient_history',
                 'weeksFound': len(existing_weeks)
             })
         
-        # Run backfill directly
-        result = asyncio.run(backfill_release_radar_history(user))
+        # Start backfill in background thread (returns immediately)
+        thread = threading.Thread(target=run_backfill_sync, args=(user,))
+        thread.daemon = True  # Don't block Lambda shutdown
+        thread.start()
         
-        return response(200, result)
+        log.info(f"[{email}] Backfill started in background thread")
+        
+        return response(200, {
+            'email': email,
+            'status': 'started',
+            'message': 'Backfill running in background. Refresh page to see new data.',
+            'existingWeeks': len(existing_weeks)
+        })
         
     except Exception as err:
-        log.error(f"Backfill error: {err}")
+        log.error(f"Backfill trigger error: {err}")
         return response(500, {'error': str(err)})
 
 

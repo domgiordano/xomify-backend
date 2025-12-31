@@ -1,11 +1,13 @@
 """
 XOMIFY Release Radar History Backfill
 =====================================
-Backfills 4 weeks (1 month) of release radar history for new users.
+Backfills 6 months of release radar history for new users.
 
 Week Definition: Sunday 00:00:00 to Saturday 23:59:59
 - Only saves COMPLETED weeks (not current incomplete week)
 - All backfilled weeks are marked as finalized=True
+
+Called from handler via background thread - returns immediately to user.
 """
 
 import asyncio
@@ -25,14 +27,30 @@ from lambdas.common.release_radar_dynamo import (
 log = get_logger(__file__)
 
 # Backfill config
-BACKFILL_WEEKS = 4  # 1 month of history
-BATCH_SIZE = 10  # Artists per batch (smaller = less rate limiting)
-BATCH_DELAY_SECONDS = 1.0  # Delay between batches to avoid rate limits
+BACKFILL_WEEKS = 26  # 6 months of history
+BATCH_SIZE = 20  # Artists per batch
+BATCH_DELAY_SECONDS = 0.5  # Delay between batches to avoid rate limits
+
+
+def run_backfill_sync(user: dict) -> dict:
+    """
+    Synchronous wrapper for backfill - used by threading.
+    Creates new event loop for the background thread.
+    """
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(backfill_release_radar_history(user))
+        loop.close()
+        return result
+    except Exception as err:
+        log.error(f"Sync backfill wrapper error: {err}")
+        return {"status": "error", "error": str(err)}
 
 
 async def backfill_release_radar_history(user: dict) -> dict:
     """
-    Backfill 4 weeks (1 month) of release radar history for a user.
+    Backfill 6 months of release radar history for a user.
     
     Only backfills COMPLETED weeks (not current incomplete week).
     All backfilled weeks are marked as finalized=True.
@@ -45,15 +63,15 @@ async def backfill_release_radar_history(user: dict) -> dict:
     """
     email = user.get('email', 'unknown')
     
-    log.info(f"[{email}] Starting {BACKFILL_WEEKS}-week history backfill...")
+    log.info(f"[{email}] Starting {BACKFILL_WEEKS}-week (6 month) history backfill...")
     
-    # Check how many weeks of history exist - only skip if MORE than 1 week
-    # (1 week = just current week from /live, doesn't count as "history")
-    existing_weeks = get_user_release_radar_history(email, limit=5, finalized_only=False)
+    # Check how many weeks of history exist
+    existing_weeks = get_user_release_radar_history(email, limit=30, finalized_only=False)
+    existing_week_keys = {w.get('weekKey') for w in existing_weeks}
     
-    if len(existing_weeks) > 1:
+    if len(existing_weeks) >= 30:
         log.info(f"[{email}] User already has {len(existing_weeks)} weeks of history, skipping backfill")
-        return {"email": email, "status": "skipped", "reason": "history_exists", "weeksFound": len(existing_weeks)}
+        return {"email": email, "status": "skipped", "reason": "sufficient_history", "weeksFound": len(existing_weeks)}
     
     connector = aiohttp.TCPConnector(limit=5)  # Lower concurrency
     timeout = aiohttp.ClientTimeout(total=540)  # 9 min timeout (Lambda max is 15)
@@ -73,7 +91,7 @@ async def backfill_release_radar_history(user: dict) -> dict:
             if not artist_ids:
                 return {"email": email, "status": "skipped", "reason": "no_followed_artists"}
             
-            # Fetch all releases from last 4 weeks
+            # Fetch all releases from last 6 months
             log.info(f"[{email}] Fetching releases from last {BACKFILL_WEEKS} weeks...")
             all_releases = await fetch_all_releases_for_backfill(
                 spotify, 
@@ -91,10 +109,17 @@ async def backfill_release_radar_history(user: dict) -> dict:
             
             # Save each COMPLETED week to DynamoDB
             weeks_saved = 0
+            weeks_skipped = 0
             for week_key, releases in releases_by_week.items():
                 # Skip current incomplete week
                 if week_key == current_week_key:
                     log.info(f"[{email}] Skipping current incomplete week {week_key}")
+                    continue
+                
+                # Skip weeks that already exist
+                if week_key in existing_week_keys:
+                    log.debug(f"[{email}] Skipping existing week {week_key}")
+                    weeks_skipped += 1
                     continue
                 
                 try:
@@ -106,6 +131,7 @@ async def backfill_release_radar_history(user: dict) -> dict:
                         finalized=True  # Backfilled weeks are finalized
                     )
                     weeks_saved += 1
+                    log.info(f"[{email}] Saved week {week_key} with {len(releases)} releases")
                 except Exception as err:
                     log.warning(f"[{email}] Failed to save week {week_key}: {err}")
             
