@@ -89,11 +89,9 @@ async def get_live_releases(params: dict) -> dict:
     Smart fetch that combines current week + backfill when needed.
     
     Flow:
-    1. Check if user has enough history (30+ weeks)
-    2. If NO history: Fetch 6 months of data in ONE pass
-       - Return current week immediately
-       - Save all weeks to DB (current week not finalized, past weeks finalized)
-    3. If HAS history: Just check/update current week
+    1. FIRST: Check if current week was already updated today - if yes, return cached
+    2. If not updated today AND user has < 30 weeks: do full 6-month fetch
+    3. If not updated today AND user has >= 30 weeks: just fetch current week
     
     Query params:
     - email: User's email (required)
@@ -115,7 +113,7 @@ async def get_live_releases(params: dict) -> dict:
         # Check current week status
         current_week_data = next((w for w in existing_weeks if w.get('weekKey') == current_week_key), None)
         
-        # If current week is finalized, just return it
+        # PRIORITY 1: If current week is finalized, just return it
         if current_week_data and current_week_data.get('finalized'):
             log.info(f"[{email}] Current week is finalized, returning DB data")
             return response(200, {
@@ -126,12 +124,12 @@ async def get_live_releases(params: dict) -> dict:
                 'finalized': True
             })
         
-        # Check if we need to refresh current week (not updated today)
+        # PRIORITY 2: Check if current week was already updated TODAY
+        # This takes precedence over backfill check - don't hit Spotify multiple times per day
         needs_refresh = force_refresh or check_week_needs_refresh(email, current_week_key)
         
-        # If has enough history AND current week doesn't need refresh, return cached
-        if has_enough_history and not needs_refresh and current_week_data:
-            log.info(f"[{email}] Already updated today, returning cached data")
+        if not needs_refresh and current_week_data:
+            log.info(f"[{email}] Current week already updated today, returning cached data")
             return response(200, {
                 'email': email,
                 'weekKey': current_week_key,
@@ -140,14 +138,13 @@ async def get_live_releases(params: dict) -> dict:
                 'finalized': False
             })
         
-        # Get user data for Spotify auth
+        # Need to fetch from Spotify - get user data
         user = get_user_table_data(email)
         if not user:
             return response(404, {'error': 'User not found'})
         
-        # Decide: full backfill or just current week
+        # PRIORITY 3: If not enough history, do full 6-month fetch
         if not has_enough_history:
-            # FULL FETCH: 6 months including current week
             log.info(f"[{email}] User has {len(existing_weeks)} weeks, doing full 6-month fetch...")
             current_week, weeks_saved = await fetch_and_save_all_releases(
                 user, 
@@ -155,7 +152,7 @@ async def get_live_releases(params: dict) -> dict:
                 current_week_key
             )
         else:
-            # QUICK FETCH: Just current week
+            # PRIORITY 4: Just fetch current week
             log.info(f"[{email}] User has enough history, fetching current week only...")
             current_week = await fetch_current_week_only(user, current_week_key)
             weeks_saved = 1 if current_week else 0
