@@ -1,14 +1,16 @@
 """
 XOMIFY Release Radar API Handler
 ================================
-API endpoints for release radar history.
+API endpoints for release radar history AND weekly cron job.
 
 Endpoints:
 - GET /release-radar/history - Get user's release radar history
 - GET /release-radar/week/{weekKey} - Get specific week's data
 - GET /release-radar/live - Fetch current week live from Spotify (daily refresh)
 - GET /release-radar/check - Check if user has history
-- POST /release-radar/backfill - Trigger backfill for user
+
+Cron:
+- Weekly cron job to finalize previous week's data and create playlists
 """
 
 import json
@@ -17,6 +19,7 @@ import aiohttp
 from datetime import datetime, timedelta
 
 from lambdas.common.logger import get_logger
+from lambdas.common.utility_helpers import is_cron_event, success_response
 from lambdas.common.release_radar_dynamo import (
     get_user_release_radar_history,
     get_release_radar_week,
@@ -31,6 +34,9 @@ from lambdas.common.dynamo_helpers import get_user_table_data
 from lambdas.common.spotify import Spotify
 from lambdas.common.aiohttp_helper import fetch_json
 
+# Import the cron job function
+from weekly_release_radar_aiohttp import aiohttp_release_radar_chron_job
+
 log = get_logger(__file__)
 
 HANDLER = 'release-radar'
@@ -38,9 +44,25 @@ HANDLER = 'release-radar'
 
 def handler(event, context):
     """
-    Main API Gateway handler for release radar endpoints.
+    Main Lambda handler for release radar.
+    Handles both cron job invocation AND API requests.
     """
     try:
+        # ========================================
+        # CRON JOB - Weekly Release Radar
+        # ========================================
+        if is_cron_event(event):
+            log.info("📻 Starting weekly release radar cron job...")
+            successes, failures = asyncio.run(aiohttp_release_radar_chron_job(event))
+            log.info(f"✅ Release radar cron complete - {len(successes)} users processed, {len(failures)} failed")
+            return success_response({
+                "successfulUsers": successes,
+                "failedUsers": failures
+            }, is_api=False)
+        
+        # ========================================
+        # API REQUESTS
+        # ========================================
         http_method = event.get('httpMethod', event.get('requestContext', {}).get('http', {}).get('method'))
         path = event.get('path', event.get('rawPath', ''))
         
@@ -74,7 +96,7 @@ def handler(event, context):
             return response(404, {'error': 'Not found'})
             
     except Exception as err:
-        log.error(f"Release Radar API error: {err}")
+        log.error(f"Release Radar handler error: {err}")
         return response(500, {'error': str(err)})
 
 
