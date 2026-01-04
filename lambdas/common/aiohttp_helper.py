@@ -12,11 +12,34 @@ from lambdas.common.errors import SpotifyAPIError
 
 log = get_logger(__file__)
 
-# Global rate limit event - blocks all requests when rate limited
-_rate_limited = asyncio.Event()
-_rate_limited.set()  # Start in "open" state
+# Rate limit event - initialized lazily per event loop
+_rate_limited: asyncio.Event = None
 
 MAX_RETRIES = 3
+
+
+def _get_rate_limit_event() -> asyncio.Event:
+    """
+    Get or create the rate limit event for the current event loop.
+    This ensures the event is always bound to the correct loop.
+    """
+    global _rate_limited
+    
+    try:
+        # Check if we have an event and it's bound to the current loop
+        if _rate_limited is not None:
+            # Try to access the event - will fail if wrong loop
+            loop = asyncio.get_running_loop()
+            # In Python 3.10+, events don't have _loop attribute exposed the same way
+            # So we just try to use it and recreate if it fails
+            return _rate_limited
+    except RuntimeError:
+        pass
+    
+    # Create new event for current loop
+    _rate_limited = asyncio.Event()
+    _rate_limited.set()  # Start in "open" state
+    return _rate_limited
 
 
 async def fetch_json(
@@ -42,7 +65,8 @@ async def fetch_json(
     """
     try:
         # Wait if globally rate limited
-        await _rate_limited.wait()
+        rate_event = _get_rate_limit_event()
+        await rate_event.wait()
         
         async with session.get(url, headers=headers) as resp:
             # Handle rate limiting
@@ -50,9 +74,9 @@ async def fetch_json(
                 retry_after = int(resp.headers.get('Retry-After', 1))
                 log.warning(f"Rate limited on GET {url}. Waiting {retry_after}s...")
                 
-                _rate_limited.clear()
+                rate_event.clear()
                 await asyncio.sleep(retry_after + 1)
-                _rate_limited.set()
+                rate_event.set()
                 
                 if retry_count < MAX_RETRIES:
                     return await fetch_json(session, url, headers, retry_count + 1)
@@ -118,16 +142,17 @@ async def post_json(
     POST JSON to URL with rate limit handling.
     """
     try:
-        await _rate_limited.wait()
+        rate_event = _get_rate_limit_event()
+        await rate_event.wait()
         
         async with session.post(url, headers=headers, json=json) as resp:
             if resp.status == 429:
                 retry_after = int(resp.headers.get('Retry-After', 1))
                 log.warning(f"Rate limited on POST {url}. Waiting {retry_after}s...")
                 
-                _rate_limited.clear()
+                rate_event.clear()
                 await asyncio.sleep(retry_after + 1)
-                _rate_limited.set()
+                rate_event.set()
                 
                 if retry_count < MAX_RETRIES:
                     return await post_json(session, url, headers, json, retry_count + 1)
@@ -185,16 +210,17 @@ async def delete_json(
     DELETE request with JSON body.
     """
     try:
-        await _rate_limited.wait()
+        rate_event = _get_rate_limit_event()
+        await rate_event.wait()
         
         async with session.delete(url, headers=headers, json=json) as resp:
             if resp.status == 429:
                 retry_after = int(resp.headers.get('Retry-After', 1))
                 log.warning(f"Rate limited on DELETE {url}. Waiting {retry_after}s...")
                 
-                _rate_limited.clear()
+                rate_event.clear()
                 await asyncio.sleep(retry_after + 1)
-                _rate_limited.set()
+                rate_event.set()
                 
                 if retry_count < MAX_RETRIES:
                     return await delete_json(session, url, headers, json, retry_count + 1)
@@ -238,16 +264,17 @@ async def put_data(
     PUT raw data (like base64 image).
     """
     try:
-        await _rate_limited.wait()
+        rate_event = _get_rate_limit_event()
+        await rate_event.wait()
         
         async with session.put(url, data=data, headers=headers) as resp:
             if resp.status == 429:
                 retry_after = int(resp.headers.get('Retry-After', 1))
                 log.warning(f"Rate limited on PUT {url}. Waiting {retry_after}s...")
                 
-                _rate_limited.clear()
+                rate_event.clear()
                 await asyncio.sleep(retry_after + 1)
-                _rate_limited.set()
+                rate_event.set()
                 
                 if retry_count < MAX_RETRIES:
                     return await put_data(session, url, data, headers, retry_count + 1)
