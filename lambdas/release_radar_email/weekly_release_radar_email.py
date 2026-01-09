@@ -3,15 +3,17 @@ XOMIFY Release Radar Email Sender
 =================================
 Sends weekly release radar emails to enrolled users.
 
-Schedule: Runs every Sunday at ~2:15 AM Eastern (15 min after playlist cron)
-Sends summary of PREVIOUS week's releases (the week that just ended Saturday).
+Schedule: Runs every Saturday at ~2:15 AM Eastern (15 min after cron)
+Sends summary of the week that just ended (last Saturday - yesterday Friday).
 """
 
+import asyncio
 from lambdas.common.logger import get_logger
 from lambdas.common.wrapped_helper import get_active_release_radar_users
 from lambdas.common.release_radar_dynamo import (
     get_previous_week_key,
-    get_release_radar_week
+    get_release_radar_week,
+    format_week_display
 )
 from lambdas.common.ses_helper import send_release_radar_email
 from lambdas.common.constants import XOMIFY_URL
@@ -23,18 +25,18 @@ async def release_radar_email_cron_job(event) -> tuple:
     """
     Main entry point for sending release radar emails.
     
-    Sends emails about the PREVIOUS week (the week that just ended Saturday).
+    Sends emails about the PREVIOUS week (ended yesterday Friday).
     
     Returns:
         Tuple of (sent_count, failed_count, skipped_count)
     """
-    log.info("=" * 50)
-    log.info("📧 Starting Release Radar Email Sender")
-    log.info("=" * 50)
+    log.info("=" * 60)
+    log.info("📧 RELEASE RADAR EMAIL SENDER STARTING")
+    log.info("=" * 60)
     
-    # Get PREVIOUS week key (the week that just ended)
+    # Get PREVIOUS week key (ended yesterday)
     week_key = get_previous_week_key()
-    log.info(f"Sending emails for LAST week: {week_key}")
+    log.info(f"Sending emails for week: {week_key} ({format_week_display(week_key)})")
     
     # Get active users
     users = get_active_release_radar_users()
@@ -53,11 +55,11 @@ async def release_radar_email_cron_job(event) -> tuple:
         user_name = user.get('displayName') or user.get('userId', 'there')
         
         try:
-            # Get LAST week's release radar data
+            # Get the week's data from DB
             week_data = get_release_radar_week(email, week_key)
             
             if not week_data:
-                log.warning(f"[{email}] No release radar data for {week_key}, skipping")
+                log.warning(f"[{email}] No data for {week_key}, skipping")
                 skipped += 1
                 continue
             
@@ -66,8 +68,8 @@ async def release_radar_email_cron_job(event) -> tuple:
             playlist_id = week_data.get('playlistId') or user.get('releaseRadarId')
             
             # Skip if no releases
-            if not releases or stats.get('totalTracks', 0) == 0:
-                log.info(f"[{email}] No releases last week, skipping email")
+            if not releases or stats.get('releaseCount', 0) == 0:
+                log.info(f"[{email}] No releases this week, skipping email")
                 skipped += 1
                 continue
             
@@ -85,7 +87,7 @@ async def release_radar_email_cron_job(event) -> tuple:
             )
             
             if success:
-                log.info(f"[{email}] ✅ Email sent")
+                log.info(f"[{email}] ✅ Email sent ({stats.get('releaseCount', 0)} releases)")
                 sent += 1
             else:
                 log.error(f"[{email}] ❌ Email failed")
@@ -95,11 +97,11 @@ async def release_radar_email_cron_job(event) -> tuple:
             log.error(f"[{email}] ❌ Error: {err}")
             failed += 1
     
-    log.info("=" * 50)
-    log.info(f"📧 Release Radar Email Sender Complete!")
+    log.info("=" * 60)
+    log.info(f"📧 RELEASE RADAR EMAIL SENDER COMPLETE")
     log.info(f"   ✅ Sent: {sent}")
     log.info(f"   ❌ Failed: {failed}")
     log.info(f"   ⏭️ Skipped: {skipped}")
-    log.info("=" * 50)
+    log.info("=" * 60)
     
     return sent, failed, skipped
