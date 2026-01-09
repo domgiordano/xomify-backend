@@ -33,7 +33,7 @@ from lambdas.common.release_radar_dynamo import (
 )
 
 # Import cron job
-from weekly_release_radar_cron import release_radar_cron_job
+from weekly_release_radar_aiohttp import release_radar_cron_job
 
 log = get_logger(__file__)
 
